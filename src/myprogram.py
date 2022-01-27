@@ -2,6 +2,8 @@
 import os
 import string
 import random
+import langid
+from langid.langid import LanguageIdentifier
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 
@@ -9,6 +11,9 @@ class MyModel:
     """
     This is a starter model to get you started. Feel free to modify this file.
     """
+
+    def __init__(self, identifier) -> None:
+        self.identifier = identifier
 
     @classmethod
     def load_training_data(cls):
@@ -42,6 +47,10 @@ class MyModel:
         all_chars = string.ascii_letters
         for inp in data:
             # this model just predicts a random character each time
+            # predict language of the word
+            inp = inp.lower()
+            lang, confidence = self.identifier.classify(inp)
+            print(f'language of {inp} is {lang} (conf: {confidence})')
             top_guesses = [random.choice(all_chars) for _ in range(3)]
             preds.append(''.join(top_guesses))
         return preds
@@ -55,10 +64,10 @@ class MyModel:
     @classmethod
     def load(cls, work_dir):
         # your code here
-        # this particular model has nothing to load, but for demonstration purposes we will load a blank file
-        with open(os.path.join(work_dir, 'model.checkpoint')) as f:
-            dummy_save = f.read()
-        return MyModel()
+        # this particular model has nothing to load, but for demonstra  tion purposes we will load a blank file
+        # with open(os.path.join(work_dir, 'model.checkpoint')) as f:
+        #     dummy_save = f.read()
+        return MyModel(identifier)
 
 
 if __name__ == '__main__':
@@ -70,13 +79,16 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     random.seed(0)
+    identifier = LanguageIdentifier.from_modelstring(langid.langid.model, norm_probs=True)
+    if not os.path.isdir(args.work_dir):
+        os.makedirs(args.work_dir, exist_ok=True)
 
     if args.mode == 'train':
         if not os.path.isdir(args.work_dir):
             print('Making working directory {}'.format(args.work_dir))
             os.makedirs(args.work_dir)
         print('Instatiating model')
-        model = MyModel()
+        model = MyModel(identifier)
         print('Loading training data')
         train_data = MyModel.load_training_data()
         print('Training')
