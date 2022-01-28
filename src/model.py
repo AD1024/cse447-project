@@ -1,17 +1,34 @@
-from functools import cache
 import nltk
+import tensorflow as tf
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import tqdm
+import tensorflow.keras as keras
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.utils import to_categorical
 from utils import cached
 
 @cached
 def load_corpus():
     from nltk.corpus import brown
     vocab = brown.words()
-    return list(map(lambda x: x.lower(), vocab[:len(vocab) // 100]))
+    isword = lambda x: all(map(lambda x: x.isalpha(), list(x)))
+    vocab = list(filter(isword, vocab))
+    return list(map(lambda x: x.lower(), vocab[:len(vocab) // 20]))
+
+@cached
+def load_twitter_corpus():
+    from nltk.corpus import twitter_samples
+    tokenized = twitter_samples.tokenized()
+    isword = lambda x: all(map(lambda x: x.isalpha(), list(x)))
+    result = []
+    for tokens in tokenized:
+        t = list(filter(isword, tokens))
+        t = ["<BOS>"] + t
+        result += t
+    return result
 
 def annotate_sentences(tokens, begin_of_sentence="<BOS>", end_of_sentence="<EOS>"):
     result = [begin_of_sentence]
@@ -39,14 +56,18 @@ def to_vec(tokens, begin_of_sentence="<BOS>", end_of_sentence="<EOS>"):
         return mapping[tok]
     return list(map(get_or_add, tokens)), mapping
 
-def to_train_data(word_vec, sequence_len=5):
-    while len(word_vec) % sequence_len != 0:
-        word_vec.append(0)
-    return np.asarray(word_vec).reshape((-1, sequence_len))
-
-def to_categorical(word_vec, num_classes):
-    one_hot_vecs = np.eye(num_classes)
-    return list(map(lambda x: one_hot_vecs[x], word_vec))
+def to_train_data(tokens, sequence_len=5):
+    result = []
+    tmp = []
+    for tok in tokens:
+        if len(tmp) == sequence_len:
+            result.append(tmp.copy())
+            tmp.clear()
+        tmp.append(tok)
+    while len(tmp) < sequence_len:
+        tmp.append("<EOS>")
+    result.append(tmp.copy())
+    return result
 
 class Model(nn.Module):
     def __init__(self, batch_size, vocab_size, seq_length, num_embedding, num_hidden) -> None:
@@ -62,27 +83,43 @@ class Model(nn.Module):
         fc1 = self.linear_act(output)
         return fc1, hidden
 
-def validate(model, inputs, mappings):
+def validate(model, inputs, tokenizer):
     inputs = list(map(lambda x: x.lower(), inputs))
-    inputs = np.asarray([[mappings.get(x) for x in inputs]])
-    lookup = { k : v for (v, k) in mappings.items() }
+    inp = np.asarray(tokenizer.texts_to_sequences([inputs]))
     with torch.no_grad():
-        inp = torch.from_numpy(inputs)
+        inp = torch.from_numpy(inp)
         pred, _ = model(inp)
-        outputs = torch.softmax(pred)
+        outputs = torch.softmax(pred, dim=1)
         predicted = np.argmax(outputs.numpy())
-        word = lookup.get(predicted)
-        print("predicted: ", word)
+        print(predicted)
+        outputs = outputs.numpy()[0].tolist()
+        selections = list(enumerate(outputs))
+        selections.sort(key=lambda x: -x[1])
+        print(selections[:5])
+        print("predicted: ", tokenizer.sequences_to_texts([[x[0] for x in selections[:10]]]))
+        print("predicted: ", tokenizer.sequences_to_texts([[predicted]]))
 
-def train(model, num_epoch=100, batch_size=32, sequence_length=3, lr=0.05, checkpoint_path="./model.pth", load_model=False):
-    corpus = load_corpus()
+def validate_checkpoint(model="./model.pth"):
+    corpus = load_twitter_corpus()
     tokens = annotate_sentences(corpus)
-    word_vec, word2int = to_vec(tokens)
-    vocab_size = len(word2int) + 1
-    int2word = {k : v for v, k in word2int.items()}
-    word_vec = to_train_data(word_vec, sequence_len=sequence_length)
-    train_inputs = word_vec[:, :-1]
-    targets = word_vec[: , -1]
+    tokenizer = Tokenizer()
+    tokenizer.fit_on_texts(tokens)
+    model = torch.load(model)
+    validate(model, ["me", "the"], tokenizer)
+
+def train(model, num_epoch=5, batch_size=32, sequence_length=3, lr=0.05, checkpoint_path="./model_twitter.pth", load_model=False):
+    print("Loading corpus")
+    corpus = load_twitter_corpus()
+    tokens = annotate_sentences(corpus)
+    tokens = to_train_data(tokens, sequence_len=sequence_length)
+    tokenizer = Tokenizer()
+    print("Fit on tokenizer")
+    tokenizer.fit_on_texts(tokens)
+    tokens = np.asarray(tokenizer.texts_to_sequences(tokens))
+    tokens = tokens.reshape((-1, sequence_length))
+    vocab_size = len(tokenizer.word_counts) + 1
+    train_inputs = tokens[:, :-1]
+    targets = tokens[: , -1]
     if model is None:
         model = Model(batch_size, vocab_size, (sequence_length - 1), 128, 256)
     model.train()
@@ -110,7 +147,8 @@ def train(model, num_epoch=100, batch_size=32, sequence_length=3, lr=0.05, check
                 epoch_progress.set_description(f"Epoch {epoch} | Loss = {loss}")
         torch.save(model, checkpoint_path)
 
-    validate(model, ["this", "is"])
+    validate(model, ["happy", "new"], tokenizer)
 
 if __name__ == '__main__':
     train(None)
+    # validate_checkpoint()
