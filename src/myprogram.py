@@ -1,11 +1,15 @@
 #!/usr/bin/env python
 import os
+import nltk
 import string
 import random
 import langid
 from langid.langid import LanguageIdentifier
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
+nltk.download('punkt')
+nltk.download('brown')
+nltk.download('words')
 
 class MyModel:
     """
