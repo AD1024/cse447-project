@@ -1,3 +1,4 @@
+from distutils.command.build import build
 import nltk
 import tensorflow as tf
 import torch
@@ -5,6 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import tqdm
+import pygtrie as trie
+import pygtrie as trie
 import tensorflow.keras as keras
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.utils import to_categorical
@@ -19,16 +22,24 @@ def load_corpus():
     return list(map(lambda x: x.lower(), vocab[:len(vocab) // 20]))
 
 @cached
-def load_twitter_corpus():
+def load_twitter_corpus(build_trie=False):
     from nltk.corpus import twitter_samples
     tokenized = twitter_samples.tokenized()
     isword = lambda x: all(map(lambda x: x.isalpha(), list(x)))
     result = []
+    if build_trie:
+        prefix_set = trie.PrefixSet()
     for tokens in tokenized:
         t = list(filter(isword, tokens))
+        if build_trie:
+            for x in t:
+                prefix_set.add(x.lower())
         t = ["<BOS>"] + t
         result += t
-    return result
+    if not build_trie:
+        return result
+    else:
+        return result, prefix_set
 
 def annotate_sentences(tokens, begin_of_sentence="<BOS>", end_of_sentence="<EOS>"):
     result = [begin_of_sentence]
@@ -83,7 +94,7 @@ class Model(nn.Module):
         fc1 = self.linear_act(output)
         return fc1, hidden
 
-def validate(model, inputs, tokenizer):
+def validate(model, inputs, tokenizer, prefix_set=None, prefix=None):
     inputs = list(map(lambda x: x.lower(), inputs))
     inp = np.asarray(tokenizer.texts_to_sequences([inputs]))
     with torch.no_grad():
@@ -93,21 +104,34 @@ def validate(model, inputs, tokenizer):
         predicted = np.argmax(outputs.numpy())
         print(predicted)
         outputs = outputs.numpy()[0].tolist()
-        selections = list(enumerate(outputs))
+        if prefix is not None:
+            words = list(prefix_set.iter(prefix))
+            words = list(map(lambda x: ''.join(x), words))
+            selections = list(enumerate(outputs))
+            print(words)
+            # TODO: Optimize to k-sized heap
+            idx = tokenizer.texts_to_sequences([words])
+            selected = []
+            for x in idx:
+                for x in x:
+                    selected.append(selections[x])
+            selections = selected
+        else:
+            selections = list(enumerate(outputs))
         selections.sort(key=lambda x: -x[1])
-        print(selections[:5])
-        print("predicted: ", tokenizer.sequences_to_texts([[x[0] for x in selections[:10]]]))
-        print("predicted: ", tokenizer.sequences_to_texts([[predicted]]))
+        print("predicted: ", tokenizer.sequences_to_texts([[x[0] for x in selections[:20]]]))
 
-def validate_checkpoint(model="./model.pth"):
-    corpus = load_twitter_corpus()
+def validate_checkpoint(model="./model_twitter.pth"):
+    corpus, prefix_set = load_twitter_corpus(build_trie=True)
+    # print(list(prefix_set.iter()))
+    # print(list(map(lambda x: ''.join(x), list(prefix_set.iter("t")))))
     tokens = annotate_sentences(corpus)
     tokenizer = Tokenizer()
     tokenizer.fit_on_texts(tokens)
     model = torch.load(model)
-    validate(model, ["me", "the"], tokenizer)
+    validate(model, ["hello", "world"], tokenizer, prefix_set, None)
 
-def train(model, num_epoch=5, batch_size=32, sequence_length=3, lr=0.05, checkpoint_path="./model_twitter.pth", load_model=False):
+def train(model, num_epoch=1, batch_size=32, sequence_length=3, lr=0.05, checkpoint_path="./model_twitter.pth", load_model=False):
     print("Loading corpus")
     corpus = load_twitter_corpus()
     tokens = annotate_sentences(corpus)
@@ -135,7 +159,8 @@ def train(model, num_epoch=5, batch_size=32, sequence_length=3, lr=0.05, checkpo
     epoch_progress = tqdm.tqdm(range(num_epoch))
     for epoch in epoch_progress:
         permutation = torch.randperm(inputs.size()[0])
-        for i in range(0, inputs.size()[0], batch_size):
+        batch_progress = tqdm.tqdm(range(0, inputs.size()[0], batch_size))
+        for i in batch_progress:
             indices = permutation[i:i + batch_size]
             batch_inp, batch_target = inputs[indices], targets[indices]
             optimizer.zero_grad()
@@ -147,8 +172,8 @@ def train(model, num_epoch=5, batch_size=32, sequence_length=3, lr=0.05, checkpo
                 epoch_progress.set_description(f"Epoch {epoch} | Loss = {loss}")
         torch.save(model, checkpoint_path)
 
-    validate(model, ["happy", "new"], tokenizer)
+    validate(model, ["happy", "new"], prefix_set=tokenizer)
 
 if __name__ == '__main__':
-    train(None)
-    # validate_checkpoint()
+    # train(None)
+    validate_checkpoint()
