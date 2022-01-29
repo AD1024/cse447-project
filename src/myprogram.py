@@ -16,7 +16,7 @@ class MyModel:
     This is a starter model to get you started. Feel free to modify this file.
     """
 
-    def __init__(self, identifier) -> None:
+    def __init__(self, identifier):
         self.identifier = identifier
 
     @classmethod
