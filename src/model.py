@@ -95,14 +95,14 @@ class Model(nn.Module):
         return fc1, hidden
 
 def validate(model, inputs, tokenizer, prefix_set=None, prefix=None):
-    inputs = list(map(lambda x: x.lower(), inputs))
+    print(inputs)
     inp = np.asarray(tokenizer.texts_to_sequences([inputs]))
+    print(inp)
     with torch.no_grad():
         inp = torch.from_numpy(inp)
         pred, _ = model(inp)
         outputs = torch.softmax(pred, dim=1)
         predicted = np.argmax(outputs.numpy())
-        print(predicted)
         outputs = outputs.numpy()[0].tolist()
         if prefix is not None:
             words = list(prefix_set.iter(prefix))
@@ -119,19 +119,26 @@ def validate(model, inputs, tokenizer, prefix_set=None, prefix=None):
         else:
             selections = list(enumerate(outputs))
         selections.sort(key=lambda x: -x[1])
-        print("predicted: ", tokenizer.sequences_to_texts([[x[0] for x in selections[:20]]]))
+        candidates = tokenizer.sequences_to_texts([[x[0] for x in selections[:20]]])
+        print("predicted: ", candidates)
+        return candidates
 
 def validate_checkpoint(model="./model_twitter.pth"):
-    corpus, prefix_set = load_twitter_corpus(build_trie=True)
+    corpus = load_twitter_corpus(build_trie=False)
     # print(list(prefix_set.iter()))
     # print(list(map(lambda x: ''.join(x), list(prefix_set.iter("t")))))
     tokens = annotate_sentences(corpus)
     tokenizer = Tokenizer()
     tokenizer.fit_on_texts(tokens)
     model = torch.load(model)
-    validate(model, ["hello", "world"], tokenizer, prefix_set, None)
+    start = ["i", "vote"]
+    for i in range(20):
+        print(start)
+        candidate = validate(model, start[-2:], tokenizer, None, None)
+        start.append(candidate[0].split()[0])
+    print(' '.join(start))
 
-def train(model, num_epoch=1, batch_size=32, sequence_length=3, lr=0.05, checkpoint_path="./model_twitter.pth", load_model=False):
+def train(model, num_epoch=1, batch_size=32, sequence_length=3, lr=0.05, checkpoint_path="./model_twitter_1.pth", load_model=False):
     print("Loading corpus")
     corpus = load_twitter_corpus()
     tokens = annotate_sentences(corpus)
@@ -150,7 +157,7 @@ def train(model, num_epoch=1, batch_size=32, sequence_length=3, lr=0.05, checkpo
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.BCEWithLogitsLoss()
     inputs = torch.from_numpy(train_inputs)
-    targets = np.asarray(to_categorical(targets.tolist(), vocab_size))
+    targets = np.asarray(to_categorical(targets, vocab_size))
     targets = torch.from_numpy(targets.astype("float32"))
     if torch.cuda.is_available():
         model = model.cuda()
