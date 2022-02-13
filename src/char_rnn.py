@@ -10,10 +10,10 @@ from utils import cached, one_hot_vector, to_dictionary
 def load_corpus():
     from nltk.corpus import brown
     vocab = brown.words()
-    return list(map(lambda x: x.lower(), vocab[:len(vocab) // 20]))
+    return list(map(lambda x: x.lower(), vocab[:len(vocab) // 10]))
 
 class CharRNN(nn.Module):
-    def __init__(self, vocab, int2char, char2int, n_ts=128, hidden_dim=128, num_layers=2, dropout=0.5) -> None:
+    def __init__(self, vocab, int2char, char2int, n_ts=128, hidden_dim=512, num_layers=2, dropout=0.5) -> None:
         super(CharRNN, self).__init__()
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
@@ -37,6 +37,19 @@ class CharRNN(nn.Module):
         out = out.contiguous().view(out.size(0) * out.size(1), self.hidden_dim)
         act = self.act(out)
         return act, (h, c)
+
+    def predict(self, characters, h=None, num_choice=1):
+        if h is None:
+            h = self.new_hidden(1)
+        inp = np.array([[self.char2int[x] for x in characters]])
+        inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(self.vocab))))
+        out, h = self.forward(inp, h)
+        prob = F.softmax(out[-1], dim=0)
+        prob, ch = prob.topk(num_choice)
+        prob = prob.numpy()
+        ch = ch.numpy()
+        ans = np.random.choice(ch, p=prob / prob.sum())
+        return self.int2char[ans], h
     
     def new_hidden(self, batch_size):
         h, c = torch.autograd.Variable(torch.randn(self.num_layers, batch_size, self.hidden_dim)),\
@@ -61,6 +74,8 @@ def to_batches(data, num_seq, seq_length):
         yield inp, target
 
 def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip=1, lr=0.001):
+    if torch.cuda.is_available():
+        model = model.cuda()
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = torch.nn.CrossEntropyLoss()
@@ -86,30 +101,34 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
                 batch_progress.set_description('Batch {} | Loss: {:.4f}'.format(i, loss.item()))
         torch.save(model, 'char_rnn.pth')
 
-def test(model: CharRNN, sentence, char2int, int2char):
+def test(model: CharRNN, sentence, char2int, int2char, predict_length=512):
     print("testing")
     with torch.no_grad():
         model.eval()
         sentence = sentence.lower()
-        inp = np.array([[char2int[x] for x in sentence]])
-        inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(model.vocab))))
-        h0 = model.new_hidden(1)
-        out, h = model(inp, h0)
-        print(F.softmax(out[-1], dim=0))
-        
-        return int2char[np.argmax(F.softmax(out[-1], dim=0)).item()]
+        # print(f'Begin: {sentence}')
+        h = model.new_hidden(1)
+        for ch in sentence:
+            c, h = model.predict(ch, h)
+        result = []
+        result.append(c)
+        for _ in range(predict_length):
+            c, h = model.predict(result[-1], h, num_choice=3)
+            result.append(c)
+        return ''.join(result)
 
 def main():
     corpus = load_corpus()
     text = ' '.join(corpus)
+
     # char2int, int2char = to_dictionary(text)
     # vocab = list(char2int.keys())
     # model = CharRNN(vocab, int2char, char2int)
     # dataset = np.array([char2int[x] for x in text])
-    # train(model, dataset, 10, 10, grad_clip=5, lr=0.002)
+    # train(model, dataset, 20, 10, grad_clip=5, lr=0.002)
 
-    model = torch.load('char_rnn.pth')
-    print(test(model, text[-130:-2], model.int2char, model.char2int))
+    model = torch.load('char_rnn_v1.pth')
+    print(test(model, 'happy new ye', model.char2int, model.int2char, predict_length=1024))
     print(text[-2])
 
 main()
