@@ -1,8 +1,10 @@
 import torch
 import torch.nn as nn
 import tqdm
+import argparse
 import numpy as np
 from torch.nn import functional as F
+from datasets import load_dataset
 import time
 
 from utils import cached, one_hot_vector, to_dictionary
@@ -12,6 +14,18 @@ def load_corpus():
     from nltk.corpus import brown
     vocab = brown.words()
     return list(map(lambda x: x.lower(), vocab[:len(vocab)]))
+
+def load_wikitext(lang='zh-cn', num_samples=1024):
+    annotations = ['_START_ARTICLE_', '_START_SECTION_', '_START_PARAGRAPH_', '\n', '_NEWLINE_']
+    dataset = load_dataset('wiki40b', 'zh-cn', split='train', beam_runner='DirectRunner')
+    result = []
+    data = dataset['text']
+    for i in range(num_samples):
+        text = data[i]
+        for x in annotations:
+            text = text.replace(x, '')
+        result.append(text)
+    return result
 
 class CharRNN(nn.Module):
     def __init__(self, vocab, char2int, int2char, n_ts=128, hidden_dim=512, num_layers=2, dropout=0.5) -> None:
@@ -44,11 +58,13 @@ class CharRNN(nn.Module):
             h = self.new_hidden(1)
         inp = np.array([[self.char2int[x] for x in characters]])
         inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(self.vocab))))
+        if torch.cuda.is_available():
+            inp = inp.cuda()
         out, h = self.forward(inp, h)
         prob = F.softmax(out[-1], dim=0)
         prob, ch = prob.topk(num_choice)
-        prob = prob.numpy()
-        ch = ch.numpy()
+        prob = prob.cpu().numpy()
+        ch = ch.cpu().numpy()
         ans = np.random.choice(ch, p=prob / prob.sum())
         return self.int2char[ans], h
     
@@ -70,6 +86,8 @@ def to_batches(data, num_seq, seq_length, volcab_len):
     inputs = []
     targets = []
     for i in range(0, data.shape[1], seq_length):
+        if i % 1000 == 0:
+            print(f'Processing Inputs: {i}')
         inp = data[:, i : i + seq_length]
         target = np.zeros_like(inp)
         target[:, :-1] = inp[:, 1:]
@@ -84,7 +102,7 @@ def to_batches(data, num_seq, seq_length, volcab_len):
         torch.autograd.Variable(torch.from_numpy(np.array(targets).reshape(batch_size, -1, seq_length)))
 
 def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip=1, lr=0.001):
-    start_time = time.time
+    start_time = time.time()
     if torch.cuda.is_available():
         model = model.cuda()
     model.train()
@@ -114,7 +132,7 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
             if i > 0 and i % 10 == 0:
                 batch_progress.set_description('Batch {} | Loss: {:.4f}'.format(i, loss.item()))
         torch.save(model, 'char_rnn.pth')
-    print(f'elapsed: {time.time - start_time}')
+    print(f'elapsed: {time.time() - start_time}')
 
 def test(model: CharRNN, sentence, predict_length=512):
     print("testing")
@@ -133,17 +151,31 @@ def test(model: CharRNN, sentence, predict_length=512):
         return ''.join(result)
 
 def main():
-    corpus = load_corpus()
-    text = ' '.join(corpus)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--train', action='store_true')
+    parser.add_argument('--batch-size', type=int, default=5)
+    parser.add_argument('--epoch', type=int, default=10)
+    parser.add_argument('--seq-len', type=int, default=128)
+    parser.add_argument('--clip', type=int, default=5)
+    parser.add_argument('--lr', type=float, default=0.002)
+    parser.add_argument('--pred-len', type=int, default=128)
+    args = parser.parse_args()
+    if args.train:
+        # corpus = load_corpus()
+        # text = ' '.join(corpus)
+        corpus = load_wikitext()
+        text = ' '.join(corpus)
 
-    char2int, int2char = to_dictionary(text)
-    vocab = list(char2int.keys())
-    model = CharRNN(vocab, char2int, int2char)
-    dataset = np.array([char2int[x] for x in text])
-    train(model, dataset, 100, 10, grad_clip=5, lr=0.001)
-
-    # model = torch.load('char_rnn_v1.pth')
-    # print(test(model, 'happy new ye', predict_length=1024))
-    # print(text[-2])
+        char2int, int2char = to_dictionary(text)
+        vocab = list(char2int.keys())
+        model = CharRNN(vocab, char2int, int2char)
+        dataset = np.array([char2int[x] for x in text])
+        train(model, dataset, args.epoch, args.batch_size,
+                grad_clip=args.clip, lr=args.lr, seq_length=args.seq_len)
+    else:
+        model = torch.load('char_rnn.pth')
+        print(len(model.char2int.keys()))
+        print(test(model, '蔡徐坤打篮球', predict_length=args.pred_len))
+        # print(text[-2])
 
 main()
