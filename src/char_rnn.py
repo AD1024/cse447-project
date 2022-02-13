@@ -6,6 +6,8 @@ import numpy as np
 from torch.nn import functional as F
 from datasets import load_dataset
 import time
+import os
+import random
 
 from utils import cached, one_hot_vector, to_dictionary
 
@@ -26,6 +28,26 @@ def load_wikitext(lang='zh-cn', num_samples=1024):
             text = text.replace(x, '')
         result.append(text)
     return result
+
+@cached
+def load_wiki():
+    res = []
+    progress = tqdm.tqdm(list(os.listdir('wiki')))
+    for fname in progress:
+        progress.set_description('loading wiki/' + fname)
+        with open('wiki/' + fname) as f:
+            i = 1000
+            line = f.readline()
+            while line and i > 0:
+                line = line.split('\t')
+                # source lang
+                res.append(line[1])
+                # target lang
+                res.append(line[2][:-1])
+                line = f.readline()
+                i -= 1
+    random.shuffle(res)
+    return res
 
 class CharRNN(nn.Module):
     def __init__(self, vocab, char2int, int2char, n_ts=128, hidden_dim=512, num_layers=2, dropout=0.5) -> None:
@@ -109,30 +131,28 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = torch.nn.CrossEntropyLoss()
     train_set = data[:int(0.9 * len(data))]
-    epoch_progress = tqdm.tqdm(range(num_epoch), position=1)
+    epoch_progress = tqdm.tqdm(range(num_epoch), position=0)
 
     batch_seq_size, inputs, targets = to_batches(train_set, batch_size, seq_length, len(model.vocab))
-    if torch.cuda.is_available():
-        inputs = inputs.cuda()
-        targets = targets.cuda()
     for epoch in epoch_progress:
         epoch_progress.set_description(f'Epoch {epoch}')
         hc = model.new_hidden(batch_size)
-        batch_progress = tqdm.tqdm(range(1, batch_seq_size + 1), position=0)
+        batch_progress = tqdm.tqdm(range(1, batch_seq_size + 1), position=1)
         for (i, inp, target) in zip(batch_progress, inputs, targets):
-            # inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(model.vocab))))
-            # target = torch.autograd.Variable(torch.from_numpy(target))
+            if torch.cuda.is_available():
+                inp = inp.cuda()
+                target = target.cuda()
             hc = list(map(lambda x: torch.autograd.Variable(x.data), hc))
             model.zero_grad()
             out, h = model(inp, hc)
             loss = criterion(out, target.view(batch_size * seq_length))
             loss.backward()
-            torch.nn.utils.clip_grad_norm(model.parameters(), grad_clip)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
             if i > 0 and i % 10 == 0:
                 batch_progress.set_description('Batch {} | Loss: {:.4f}'.format(i, loss.item()))
         torch.save(model, 'char_rnn.pth')
-    print(f'elapsed: {time.time() - start_time}')
+    print('elapsed: {:10.4f} seconds'.format(time.time() - start_time))
 
 def test(model: CharRNN, sentence, predict_length=512):
     print("testing")
@@ -177,5 +197,22 @@ def main():
         print(len(model.char2int.keys()))
         print(test(model, '蔡徐坤打篮球', predict_length=args.pred_len))
         # print(text[-2])
+        #     model = torch.load('char_rnn.pth')
+        #     inputs = '''Happ
+        # Happy Ne
+        # Happy New Yea
+        # That’s one small ste
+        # That’s one sm
+        # That’
+        # Th
+        # one giant leap for mankin
+        # one giant leap fo
+        # one giant lea
+        # one giant l
+        # one gia
+        # on'''.split('\n')
+        #     for input in inputs:
+        #         print(input)
+        #         print(test(model, input, predict_length=1))
 
 main()
