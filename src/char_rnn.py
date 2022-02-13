@@ -103,13 +103,11 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
         epoch_progress.set_description(f'Epoch {epoch}')
         hc = model.new_hidden(batch_size)
         batch_progress = tqdm.tqdm(range(1, batch_seq_size + 1), position=1)
-        perm = torch.randperm(inputs.size()[0])
-        for (i, inp, target) in zip(batch_progress, inputs[perm], targets[perm]):
-            batch_perm = torch.randperm(inp.size()[0])
+        for (i, inp, target) in zip(batch_progress, inputs, targets):
             hc = list(map(lambda x: torch.autograd.Variable(x.data), hc))
             model.zero_grad()
-            out, h = model(inp[batch_perm], hc)
-            loss = criterion(out, target[batch_perm].view(batch_size * seq_length))
+            out, h = model(inp, hc)
+            loss = criterion(out, target.view(batch_size * seq_length))
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
