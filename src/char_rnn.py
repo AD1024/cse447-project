@@ -3,6 +3,7 @@ import torch.nn as nn
 import tqdm
 import numpy as np
 from torch.nn import functional as F
+import time
 
 from utils import cached, one_hot_vector, to_dictionary
 
@@ -10,7 +11,7 @@ from utils import cached, one_hot_vector, to_dictionary
 def load_corpus():
     from nltk.corpus import brown
     vocab = brown.words()
-    return list(map(lambda x: x.lower(), vocab[:len(vocab) // 10]))
+    return list(map(lambda x: x.lower(), vocab[:len(vocab)]))
 
 class CharRNN(nn.Module):
     def __init__(self, vocab, char2int, int2char, n_ts=128, hidden_dim=512, num_layers=2, dropout=0.5) -> None:
@@ -83,6 +84,7 @@ def to_batches(data, num_seq, seq_length, volcab_len):
         torch.autograd.Variable(torch.from_numpy(np.array(targets).reshape(batch_size, -1, seq_length)))
 
 def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip=1, lr=0.001):
+    start_time = time.time
     if torch.cuda.is_available():
         model = model.cuda()
     model.train()
@@ -112,7 +114,7 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
             if i > 0 and i % 10 == 0:
                 batch_progress.set_description('Batch {} | Loss: {:.4f}'.format(i, loss.item()))
         torch.save(model, 'char_rnn.pth')
-    print()
+    print(f'elapsed: {time.time - start_time}')
 
 def test(model: CharRNN, sentence, predict_length=512):
     print("testing")
@@ -138,7 +140,7 @@ def main():
     vocab = list(char2int.keys())
     model = CharRNN(vocab, char2int, int2char)
     dataset = np.array([char2int[x] for x in text])
-    train(model, dataset, 1, 10, grad_clip=5, lr=0.002)
+    train(model, dataset, 100, 10, grad_clip=5, lr=0.001)
 
     # model = torch.load('char_rnn_v1.pth')
     # print(test(model, 'happy new ye', predict_length=1024))
