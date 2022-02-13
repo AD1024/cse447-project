@@ -44,11 +44,13 @@ class CharRNN(nn.Module):
             h = self.new_hidden(1)
         inp = np.array([[self.char2int[x] for x in characters]])
         inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(self.vocab))))
+        if torch.cuda.is_available():
+            inp = inp.cuda()
         out, h = self.forward(inp, h)
         prob = F.softmax(out[-1], dim=0)
         prob, ch = prob.topk(num_choice)
-        prob = prob.numpy()
-        ch = ch.numpy()
+        prob = prob.cpu().numpy()
+        ch = ch.cpu().numpy()
         ans = np.random.choice(ch, p=prob / prob.sum())
         return self.int2char[ans], h
     
@@ -84,14 +86,14 @@ def to_batches(data, num_seq, seq_length, volcab_len):
         torch.autograd.Variable(torch.from_numpy(np.array(targets).reshape(batch_size, -1, seq_length)))
 
 def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip=1, lr=0.001):
-    start_time = time.time
+    start_time = time.time()
     if torch.cuda.is_available():
         model = model.cuda()
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = torch.nn.CrossEntropyLoss()
     train_set = data[:int(0.9 * len(data))]
-    epoch_progress = tqdm.tqdm(range(num_epoch), position=1)
+    epoch_progress = tqdm.tqdm(range(num_epoch), position=0)
 
     batch_seq_size, inputs, targets = to_batches(train_set, batch_size, seq_length, len(model.vocab))
     if torch.cuda.is_available():
@@ -100,7 +102,7 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
     for epoch in epoch_progress:
         epoch_progress.set_description(f'Epoch {epoch}')
         hc = model.new_hidden(batch_size)
-        batch_progress = tqdm.tqdm(range(1, batch_seq_size + 1), position=0)
+        batch_progress = tqdm.tqdm(range(1, batch_seq_size + 1), position=1)
         for (i, inp, target) in zip(batch_progress, inputs, targets):
             # inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(model.vocab))))
             # target = torch.autograd.Variable(torch.from_numpy(target))
@@ -109,12 +111,12 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
             out, h = model(inp, hc)
             loss = criterion(out, target.view(batch_size * seq_length))
             loss.backward()
-            torch.nn.utils.clip_grad_norm(model.parameters(), grad_clip)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
             if i > 0 and i % 10 == 0:
                 batch_progress.set_description('Batch {} | Loss: {:.4f}'.format(i, loss.item()))
         torch.save(model, 'char_rnn.pth')
-    print(f'elapsed: {time.time - start_time}')
+    print('elapsed: {:10.4f} seconds'.format(time.time() - start_time))
 
 def test(model: CharRNN, sentence, predict_length=512):
     print("testing")
@@ -135,15 +137,14 @@ def test(model: CharRNN, sentence, predict_length=512):
 def main():
     corpus = load_corpus()
     text = ' '.join(corpus)
+    # char2int, int2char = to_dictionary(text)
+    # vocab = list(char2int.keys())
+    # model = CharRNN(vocab, char2int, int2char)
+    model = torch.load('char_rnn_100_en_1.1386.pth')
+    dataset = np.array([model.char2int[x] for x in text])
+    train(model, dataset, 100, 128, grad_clip=5, lr=0.001)
 
-    char2int, int2char = to_dictionary(text)
-    vocab = list(char2int.keys())
-    model = CharRNN(vocab, char2int, int2char)
-    dataset = np.array([char2int[x] for x in text])
-    train(model, dataset, 100, 10, grad_clip=5, lr=0.001)
-
-    # model = torch.load('char_rnn_v1.pth')
+    # model = torch.load('char_rnn_100_en_1.1386.pth')
     # print(test(model, 'happy new ye', predict_length=1024))
-    # print(text[-2])
 
 main()
