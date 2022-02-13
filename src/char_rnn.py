@@ -13,15 +13,15 @@ def load_corpus():
     return list(map(lambda x: x.lower(), vocab[:len(vocab) // 10]))
 
 class CharRNN(nn.Module):
-    def __init__(self, vocab, int2char, char2int, n_ts=128, hidden_dim=512, num_layers=2, dropout=0.5) -> None:
+    def __init__(self, vocab, char2int, int2char, n_ts=128, hidden_dim=512, num_layers=2, dropout=0.5) -> None:
         super(CharRNN, self).__init__()
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
         self.dropout = dropout
         self.n_ts = n_ts
         self.vocab = vocab
-        self.int2char = int2char
         self.char2int = char2int
+        self.int2char = int2char
 
         self.drop_out = nn.Dropout(self.dropout)
         self.lstm = nn.LSTM(len(self.vocab),
@@ -56,13 +56,18 @@ class CharRNN(nn.Module):
                torch.autograd.Variable(torch.randn(self.num_layers, batch_size, self.hidden_dim))
         h.zero_()
         c.zero_()
+        if torch.cuda.is_available():
+            h = h.cuda()
+            c = c.cuda()
         return h, c
 
-def to_batches(data, num_seq, seq_length):
+def to_batches(data, num_seq, seq_length, volcab_len):
     size_per_batch = num_seq * seq_length
     batch_size = len(data) // size_per_batch
     data = data[:batch_size * size_per_batch].reshape((num_seq, -1))
-    yield data.shape[1] // seq_length
+    size = data.shape[1] // seq_length
+    inputs = []
+    targets = []
     for i in range(0, data.shape[1], seq_length):
         inp = data[:, i : i + seq_length]
         target = np.zeros_like(inp)
@@ -71,7 +76,11 @@ def to_batches(data, num_seq, seq_length):
             target[:, -1] = data[:, 0]
         else:
             target[:, -1] = data[:, i + seq_length]
-        yield inp, target
+        inputs.append(one_hot_vector(inp, volcab_len))
+        targets.append(target)
+    return size, \
+        torch.autograd.Variable(torch.from_numpy(np.concatenate(inputs).reshape(batch_size, -1, seq_length, volcab_len))), \
+        torch.autograd.Variable(torch.from_numpy(np.array(targets).reshape(batch_size, -1, seq_length)))
 
 def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip=1, lr=0.001):
     if torch.cuda.is_available():
@@ -81,15 +90,18 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
     criterion = torch.nn.CrossEntropyLoss()
     train_set = data[:int(0.9 * len(data))]
     epoch_progress = tqdm.tqdm(range(num_epoch), position=1)
+
+    batch_seq_size, inputs, targets = to_batches(train_set, batch_size, seq_length, len(model.vocab))
+    if torch.cuda.is_available():
+        inputs = inputs.cuda()
+        targets = targets.cuda()
     for epoch in epoch_progress:
         epoch_progress.set_description(f'Epoch {epoch}')
         hc = model.new_hidden(batch_size)
-        batch_iter = to_batches(train_set, batch_size, seq_length)
-        batch_seq_size = next(batch_iter)
         batch_progress = tqdm.tqdm(range(1, batch_seq_size + 1), position=0)
-        for (i, (inp, target)) in zip(batch_progress, batch_iter):
-            inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(model.vocab))))
-            target = torch.autograd.Variable(torch.from_numpy(target))
+        for (i, inp, target) in zip(batch_progress, inputs, targets):
+            # inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(model.vocab))))
+            # target = torch.autograd.Variable(torch.from_numpy(target))
             hc = list(map(lambda x: torch.autograd.Variable(x.data), hc))
             model.zero_grad()
             out, h = model(inp, hc)
@@ -100,8 +112,9 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
             if i > 0 and i % 10 == 0:
                 batch_progress.set_description('Batch {} | Loss: {:.4f}'.format(i, loss.item()))
         torch.save(model, 'char_rnn.pth')
+    print()
 
-def test(model: CharRNN, sentence, char2int, int2char, predict_length=512):
+def test(model: CharRNN, sentence, predict_length=512):
     print("testing")
     with torch.no_grad():
         model.eval()
@@ -121,14 +134,14 @@ def main():
     corpus = load_corpus()
     text = ' '.join(corpus)
 
-    # char2int, int2char = to_dictionary(text)
-    # vocab = list(char2int.keys())
-    # model = CharRNN(vocab, int2char, char2int)
-    # dataset = np.array([char2int[x] for x in text])
-    # train(model, dataset, 20, 10, grad_clip=5, lr=0.002)
+    char2int, int2char = to_dictionary(text)
+    vocab = list(char2int.keys())
+    model = CharRNN(vocab, char2int, int2char)
+    dataset = np.array([char2int[x] for x in text])
+    train(model, dataset, 1, 10, grad_clip=5, lr=0.002)
 
-    model = torch.load('char_rnn_v1.pth')
-    print(test(model, 'happy new ye', model.char2int, model.int2char, predict_length=1024))
-    print(text[-2])
+    # model = torch.load('char_rnn_v1.pth')
+    # print(test(model, 'happy new ye', predict_length=1024))
+    # print(text[-2])
 
 main()
