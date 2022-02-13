@@ -13,13 +13,15 @@ def load_corpus():
     return list(map(lambda x: x.lower(), vocab[:len(vocab) // 20]))
 
 class CharRNN(nn.Module):
-    def __init__(self, vocab, n_ts=128, hidden_dim=128, num_layers=2, dropout=0.5) -> None:
+    def __init__(self, vocab, int2char, char2int, n_ts=128, hidden_dim=128, num_layers=2, dropout=0.5) -> None:
         super(CharRNN, self).__init__()
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
         self.dropout = dropout
         self.n_ts = n_ts
         self.vocab = vocab
+        self.int2char = int2char
+        self.char2int = char2int
 
         self.drop_out = nn.Dropout(self.dropout)
         self.lstm = nn.LSTM(len(self.vocab),
@@ -31,6 +33,7 @@ class CharRNN(nn.Module):
 
     def forward(self, x, h):
         out, (h, c)  = self.lstm(x, h)
+        out = self.drop_out(out)
         out = out.contiguous().view(out.size(0) * out.size(1), self.hidden_dim)
         act = self.act(out)
         return act, (h, c)
@@ -62,14 +65,14 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = torch.nn.CrossEntropyLoss()
     train_set = data[:int(0.9 * len(data))]
-    epoch_progress = tqdm.tqdm(range(num_epoch))
+    epoch_progress = tqdm.tqdm(range(num_epoch), position=1)
     for epoch in epoch_progress:
         epoch_progress.set_description(f'Epoch {epoch}')
         hc = model.new_hidden(batch_size)
         batch_iter = to_batches(train_set, batch_size, seq_length)
         batch_seq_size = next(batch_iter)
-        batch_progress = tqdm.tqdm(range(1, batch_seq_size + 1))
-        for (i, (inp, target)) in enumerate(batch_iter):
+        batch_progress = tqdm.tqdm(range(1, batch_seq_size + 1), position=0)
+        for (i, (inp, target)) in zip(batch_progress, batch_iter):
             inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(model.vocab))))
             target = torch.autograd.Variable(torch.from_numpy(target))
             hc = list(map(lambda x: torch.autograd.Variable(x.data), hc))
@@ -83,13 +86,30 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
                 batch_progress.set_description('Batch {} | Loss: {:.4f}'.format(i, loss.item()))
         torch.save(model, 'char_rnn.pth')
 
+def test(model: CharRNN, sentence, char2int, int2char):
+    print("testing")
+    with torch.no_grad():
+        model.eval()
+        sentence = sentence.lower()
+        inp = np.array([[char2int[x] for x in sentence]])
+        inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(model.vocab))))
+        h0 = model.new_hidden(1)
+        out, h = model(inp, h0)
+        print(F.softmax(out[-1], dim=0))
+        
+        return int2char[np.argmax(F.softmax(out[-1], dim=0)).item()]
+
 def main():
     corpus = load_corpus()
     text = ' '.join(corpus)
-    char2int, int2char = to_dictionary(text)
-    vocab = list(char2int.keys())
-    model = CharRNN(vocab)
-    dataset = np.array([char2int[x] for x in text])
-    train(model, dataset, 10, 10, grad_clip=5)
+    # char2int, int2char = to_dictionary(text)
+    # vocab = list(char2int.keys())
+    # model = CharRNN(vocab, int2char, char2int)
+    # dataset = np.array([char2int[x] for x in text])
+    # train(model, dataset, 10, 10, grad_clip=5, lr=0.002)
+
+    model = torch.load('char_rnn.pth')
+    print(test(model, text[-130:-2], model.int2char, model.char2int))
+    print(text[-2])
 
 main()
