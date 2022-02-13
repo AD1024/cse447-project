@@ -4,6 +4,8 @@ import tqdm
 import numpy as np
 from torch.nn import functional as F
 import time
+import os
+import random
 
 from utils import cached, one_hot_vector, to_dictionary
 
@@ -12,6 +14,26 @@ def load_corpus():
     from nltk.corpus import brown
     vocab = brown.words()
     return list(map(lambda x: x.lower(), vocab[:len(vocab)]))
+
+@cached
+def load_wiki():
+    res = []
+    progress = tqdm.tqdm(list(os.listdir('wiki')))
+    for fname in progress:
+        progress.set_description('loading wiki/' + fname)
+        with open('wiki/' + fname) as f:
+            i = 1000
+            line = f.readline()
+            while line and i > 0:
+                line = line.split('\t')
+                # source lang
+                res.append(line[1])
+                # target lang
+                res.append(line[2][:-1])
+                line = f.readline()
+                i -= 1
+    random.shuffle(res)
+    return res
 
 class CharRNN(nn.Module):
     def __init__(self, vocab, char2int, int2char, n_ts=128, hidden_dim=512, num_layers=2, dropout=0.5) -> None:
@@ -96,14 +118,14 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
     epoch_progress = tqdm.tqdm(range(num_epoch), position=0)
 
     batch_seq_size, inputs, targets = to_batches(train_set, batch_size, seq_length, len(model.vocab))
-    if torch.cuda.is_available():
-        inputs = inputs.cuda()
-        targets = targets.cuda()
     for epoch in epoch_progress:
         epoch_progress.set_description(f'Epoch {epoch}')
         hc = model.new_hidden(batch_size)
         batch_progress = tqdm.tqdm(range(1, batch_seq_size + 1), position=1)
         for (i, inp, target) in zip(batch_progress, inputs, targets):
+            if torch.cuda.is_available():
+                inp = inp.cuda()
+                target = target.cuda()
             hc = list(map(lambda x: torch.autograd.Variable(x.data), hc))
             model.zero_grad()
             out, h = model(inp, hc)
@@ -133,16 +155,31 @@ def test(model: CharRNN, sentence, predict_length=512):
         return ''.join(result)
 
 def main():
-    corpus = load_corpus()
+    corpus = load_wiki()
     text = ' '.join(corpus)
-    # char2int, int2char = to_dictionary(text)
-    # vocab = list(char2int.keys())
-    # model = CharRNN(vocab, char2int, int2char)
-    model = torch.load('char_rnn_100_en_1.1386.pth')
+    char2int, int2char = to_dictionary(text)
+    vocab = list(char2int.keys())
+    print('volcab size', len(vocab))
+    model = CharRNN(vocab, char2int, int2char)
     dataset = np.array([model.char2int[x] for x in text])
     train(model, dataset, 100, 128, grad_clip=5, lr=0.001)
 
-    # model = torch.load('char_rnn_100_en_1.1386.pth')
-    # print(test(model, 'happy new ye', predict_length=1024))
+#     model = torch.load('char_rnn.pth')
+#     inputs = '''Happ
+# Happy Ne
+# Happy New Yea
+# That’s one small ste
+# That’s one sm
+# That’
+# Th
+# one giant leap for mankin
+# one giant leap fo
+# one giant lea
+# one giant l
+# one gia
+# on'''.split('\n')
+#     for input in inputs:
+#         print(input)
+#         print(test(model, input, predict_length=1))
 
 main()
