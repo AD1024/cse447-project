@@ -19,7 +19,7 @@ def load_corpus():
 
 def load_wikitext(lang='zh-cn', num_samples=1024):
     annotations = ['_START_ARTICLE_', '_START_SECTION_', '_START_PARAGRAPH_', '\n', '_NEWLINE_']
-    dataset = load_dataset('wiki40b', 'zh-cn', split='train', beam_runner='DirectRunner')
+    dataset = load_dataset('wiki40b', lang, split='train', beam_runner='DirectRunner')
     result = []
     data = dataset['text']
     for i in range(num_samples):
