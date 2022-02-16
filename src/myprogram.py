@@ -1,23 +1,17 @@
 #!/usr/bin/env python
 import os
-import nltk
 import string
 import random
-import langid
-from langid.langid import LanguageIdentifier
+import torch
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
-
-nltk.download('punkt')
-nltk.download('brown')
-nltk.download('words')
 
 class MyModel:
     """
     This is a starter model to get you started. Feel free to modify this file.
     """
 
-    def __init__(self, identifier):
-        self.identifier = identifier
+    def __init__(self, pt_model):
+        self.pt_model = pt_model
 
     @classmethod
     def load_training_data(cls):
@@ -62,8 +56,9 @@ class MyModel:
     def save(self, work_dir):
         # your code here
         # this particular model has nothing to save, but for demonstration purposes we will save a blank file
-        with open(os.path.join(work_dir, 'model.checkpoint'), 'wt') as f:
-            f.write('dummy save')
+        # with open(os.path.join(work_dir, 'model.checkpoint'), 'wt') as f:
+        #     f.write('dummy save')
+        pass
 
     @classmethod
     def load(cls, work_dir):
@@ -71,7 +66,7 @@ class MyModel:
         # this particular model has nothing to load, but for demonstra  tion purposes we will load a blank file
         # with open(os.path.join(work_dir, 'model.checkpoint')) as f:
         #     dummy_save = f.read()
-        return MyModel(identifier)
+        return torch.load(os.path.join(work_dir, 'char_rnn.pth'))
 
 
 if __name__ == '__main__':
@@ -83,7 +78,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     random.seed(0)
-    identifier = LanguageIdentifier.from_modelstring(langid.langid.model, norm_probs=True)
     if not os.path.isdir(args.work_dir):
         os.makedirs(args.work_dir, exist_ok=True)
 
@@ -92,7 +86,7 @@ if __name__ == '__main__':
             print('Making working directory {}'.format(args.work_dir))
             os.makedirs(args.work_dir)
         print('Instatiating model')
-        model = MyModel(identifier)
+        model = MyModel.load(args.work_dir)
         print('Loading training data')
         train_data = MyModel.load_training_data()
         print('Training')
