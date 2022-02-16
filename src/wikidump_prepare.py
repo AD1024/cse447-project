@@ -16,12 +16,14 @@ def process_children(root: WikiNode):
                 if ch.kind == NodeKind.LINK:
                     ch_result = None
                     if len(ch.args) > 0:
-                        ch_result = ch.args[0][0]
-                        if isinstance(ch_result, str) and (ch_result.startswith('File:') or ch_result.startswith('Category:')):
-                            result += process_children(ch)
-                            continue
+                        if len(ch.args[0]) > 0:
+                            ch_result = ch.args[0][0]
+                            if isinstance(ch_result, str) and (ch_result.startswith('File:') or ch_result.startswith('Category:')):
+                                result += process_children(ch)
+                                continue
                     if len(ch.args) > 1:
-                        ch_result = ch.args[1][0]
+                        if len(ch.args[1]) > 0:
+                            ch_result = ch.args[1][0]
                     if ch_result is not None:
                         if isinstance(ch_result, str):
                             result += ch_result
@@ -44,9 +46,14 @@ def parse_page(model, title, text):
     if model == 'wikitext' and not title.startswith('Template:') and not title.startswith('Wikipedia:'):
         ctx.analyze_templates()
         ctx.start_page(title)
-        root = ctx.parse(text)
-        result = process_children(root)
-        return title, result.replace('  ', ' ')
+        try:
+            root = ctx.parse(text)
+            result = process_children(root)
+            return title, result.replace('  ', ' ')
+        except Exception as e:
+            if isinstance(e, InterruptedError):
+                exit(1)
+            return None, None
     else:
         return None, None
 
