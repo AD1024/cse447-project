@@ -88,8 +88,7 @@ class CharRNN(nn.Module):
         prob, ch = prob.topk(num_choice)
         prob = prob.cpu().numpy()
         ch = ch.cpu().numpy()
-        ans = np.random.choice(ch, p=prob / prob.sum())
-        return '|'.join([self.int2char[x] for x in ch]), h
+        return [self.int2char[x] for x in ch], h
     
     def new_hidden(self, batch_size):
         h, c = torch.autograd.Variable(torch.randn(self.num_layers, batch_size, self.hidden_dim)),\
@@ -222,5 +221,5 @@ def main():
         #     for input in inputs:
         #         print(input)
         #         print(test(model, input, predict_length=1))
-
-main()
+if __name__ == '__main__':  
+    main()

@@ -3,6 +3,7 @@ import os
 import string
 import random
 import torch
+from char_rnn import CharRNN
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 class MyModel:
@@ -11,7 +12,7 @@ class MyModel:
     """
 
     def __init__(self, pt_model):
-        self.pt_model = pt_model
+        self.model = pt_model
 
     @classmethod
     def load_training_data(cls):
@@ -24,7 +25,7 @@ class MyModel:
         # your code here
         data = []
         with open(fname) as f:
-            for line in f:
+            for line in f.readlines():
                 inp = line[:-1]  # the last character is a newline
                 data.append(inp)
         return data
@@ -42,15 +43,18 @@ class MyModel:
     def run_pred(self, data):
         # your code here
         preds = []
-        all_chars = string.ascii_letters
+        # all_chars = string.ascii_letters
         for inp in data:
             # this model just predicts a random character each time
             # predict language of the word
             inp = inp.lower()
-            lang, confidence = self.identifier.classify(inp)
-            print(f'language of {inp} is {lang} (conf: {confidence})')
-            top_guesses = [random.choice(all_chars) for _ in range(3)]
-            preds.append(''.join(top_guesses))
+            sentence = inp
+            with torch.no_grad():
+                self.model.eval()
+                h = self.model.new_hidden(1)
+                c, h = self.model.predict(str(sentence), h, num_choice=3)
+                preds.append(''.join(c))
+                print(sentence, " + ", preds[-1])
         return preds
 
     def save(self, work_dir):
@@ -77,7 +81,7 @@ if __name__ == '__main__':
     parser.add_argument('--test_output', help='path to write test predictions', default='pred.txt')
     args = parser.parse_args()
 
-    random.seed(0)
+    # random.seed(0)
     if not os.path.isdir(args.work_dir):
         os.makedirs(args.work_dir, exist_ok=True)
 
@@ -95,7 +99,7 @@ if __name__ == '__main__':
         model.save(args.work_dir)
     elif args.mode == 'test':
         print('Loading model')
-        model = MyModel.load(args.work_dir)
+        model = MyModel(MyModel.load(args.work_dir))
         print('Loading test data from {}'.format(args.test_data))
         test_data = MyModel.load_test_data(args.test_data)
         print('Making predictions')
