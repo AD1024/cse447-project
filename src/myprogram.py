@@ -70,7 +70,10 @@ class MyModel:
         # this particular model has nothing to load, but for demonstra  tion purposes we will load a blank file
         # with open(os.path.join(work_dir, 'model.checkpoint')) as f:
         #     dummy_save = f.read()
-        return torch.load(os.path.join(work_dir, 'char_rnn.pth'))
+        if torch.cuda.is_available():
+            return torch.load(os.path.join(work_dir, 'char_rnn.pth'))
+        else:
+            return torch.load(os.path.join(work_dir, 'char_rnn.pth'), map_location='cpu')
 
 
 if __name__ == '__main__':
