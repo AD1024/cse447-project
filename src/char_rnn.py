@@ -42,20 +42,12 @@ def load_wikitext(lang='zh-cn', num_samples=1024):
 @cached
 def load_wiki():
     res = []
-    progress = tqdm.tqdm(list(os.listdir('wiki')))
+    progress = tqdm.tqdm(list(os.listdir('data')))
     for fname in progress:
-        progress.set_description('loading wiki/' + fname)
-        with open('wiki/' + fname) as f:
-            i = 1000
-            line = f.readline()
-            while line and i > 0:
-                line = line.split('\t')
-                # source lang
-                # res.append(line[1])
-                # target lang
-                res.append(line[2][:-1])
-                line = f.readline()
-                i -= 1
+        progress.set_description('loading data/' + fname)
+        with open('data/' + fname) as f:
+            s = f.read()
+            res.append(s[:120000])
     return res
 
 class CharRNN(nn.Module):
@@ -70,12 +62,12 @@ class CharRNN(nn.Module):
         self.int2char = int2char
 
         self.drop_out = nn.Dropout(self.dropout)
-        self.lstm = nn.LSTM(len(self.vocab),
+        self.lstm = nn.LSTM(len(self.vocab)+1,
                             self.hidden_dim,
                             self.num_layers,
                             batch_first=True,
                             dropout=self.dropout)
-        self.act = nn.Linear(hidden_dim, len(self.vocab))
+        self.act = nn.Linear(hidden_dim, len(self.vocab)+1)
 
     def forward(self, x, h):
         out, (h, c)  = self.lstm(x, h)
@@ -87,8 +79,8 @@ class CharRNN(nn.Module):
     def predict(self, characters, h=None, num_choice=3):
         if h is None:
             h = self.new_hidden(1)
-        inp = np.array([[self.char2int[x] for x in characters]])
-        inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(self.vocab))))
+        inp = np.array([[self.char2int[x] if x in self.char2int else 0 for x in characters]])
+        inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(self.vocab)+1)))
         if torch.cuda.is_available():
             inp = inp.cuda()
         out, h = self.forward(inp, h)
@@ -116,6 +108,7 @@ def to_batches(data, num_seq, seq_length, volcab_len):
     size = data.shape[1] // seq_length
     inputs = []
     targets = []
+    print(f'Total inputs: {data.shape[1]}')
     for i in range(0, data.shape[1], seq_length):
         if i % 1000 == 0:
             print(f'Processing Inputs: {i}')
@@ -142,7 +135,7 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
     train_set = data[:int(0.9 * len(data))]
     epoch_progress = tqdm.tqdm(range(num_epoch), position=0)
 
-    batch_seq_size, inputs, targets = to_batches(train_set, batch_size, seq_length, len(model.vocab))
+    batch_seq_size, inputs, targets = to_batches(train_set, batch_size, seq_length, len(model.vocab)+1)
     for epoch in epoch_progress:
         epoch_progress.set_description(f'Epoch {epoch}')
         hc = model.new_hidden(batch_size)
@@ -210,7 +203,7 @@ def main():
     else:
         model = torch.load('char_rnn_comments.pth')
         print(len(model.char2int.keys()))
-        print(test(model, '你', predict_length=args.pred_len))
+        print(test(model, '中国邮', predict_length=args.pred_len))
         # print(text[-2])
         #     model = torch.load('char_rnn.pth')
         #     inputs = '''Happ
