@@ -8,28 +8,50 @@ def process_children(root: WikiNode):
         if isinstance(ch, str):
             result += ch.replace('\n', '')
         elif isinstance(ch, WikiNode):
-            if ch.kind in (NodeKind.LINK, NodeKind.TABLE, NodeKind.LIST,
-                            NodeKind.LIST_ITEM, NodeKind.TABLE_CAPTION,
+            if ch.kind in (NodeKind.TABLE, NodeKind.TABLE_CAPTION,
                             NodeKind.TABLE_CELL, NodeKind.TABLE_HEADER_CELL,
                             NodeKind.TABLE_ROW):
                 continue
             else:
+                if ch.kind == NodeKind.LINK:
+                    ch_result = None
+                    if len(ch.args) > 0:
+                        ch_result = ch.args[0][0]
+                        if isinstance(ch_result, str) and (ch_result.startswith('File:') or ch_result.startswith('Category:')):
+                            result += process_children(ch)
+                            continue
+                    if len(ch.args) > 1:
+                        ch_result = ch.args[1][0]
+                    if ch_result is not None:
+                        if isinstance(ch_result, str):
+                            result += ch_result
+                        elif isinstance(ch, WikiNode):
+                            result += process_children(ch_result)
+                            result += ' '
                 result += process_children(ch)
-    return result
+    return result\
+            .replace("()", '')\
+            .replace("[]", '')\
+            .replace('\{\}', '')\
+            .replace('（）', '()')\
+            .replace('-{', '')\
+            .replace('-}', '')\
+            .replace('　', '')\
+            .replace('  ', ' ')
 
 def parse_page(model, title, text):
-    ctx = Wtp()
-    if model == 'wikitext' and not title.startswith('Template:'):
+    ctx = Wtp(quiet=True)
+    if model == 'wikitext' and not title.startswith('Template:') and not title.startswith('Wikipedia:'):
         ctx.analyze_templates()
         ctx.start_page(title)
         root = ctx.parse(text)
         result = process_children(root)
-        return title, result
+        return title, result.replace('  ', ' ')
     else:
         return None, None
 
 def parse_file(filename, output_file, page_limit, num_threads=4):
-    ctx = Wtp(num_threads=num_threads, quiet=True)
+    ctx = Wtp(num_threads=num_threads)
     result = ctx.process(filename, parse_page)
     article = []
     for ((title, parsed_body), _) in zip(result, range(page_limit)):
