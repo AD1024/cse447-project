@@ -4,7 +4,7 @@ import tqdm
 import argparse
 import numpy as np
 from torch.nn import functional as F
-from datasets import load_dataset
+# from datasets import load_dataset
 import time
 import os
 import random
@@ -51,12 +51,11 @@ def load_wiki():
             while line and i > 0:
                 line = line.split('\t')
                 # source lang
-                res.append(line[1])
+                # res.append(line[1])
                 # target lang
                 res.append(line[2][:-1])
                 line = f.readline()
                 i -= 1
-    random.shuffle(res)
     return res
 
 class CharRNN(nn.Module):
@@ -85,7 +84,7 @@ class CharRNN(nn.Module):
         act = self.act(out)
         return act, (h, c)
 
-    def predict(self, characters, h=None, num_choice=1):
+    def predict(self, characters, h=None, num_choice=3):
         if h is None:
             h = self.new_hidden(1)
         inp = np.array([[self.char2int[x] for x in characters]])
@@ -98,7 +97,7 @@ class CharRNN(nn.Module):
         prob = prob.cpu().numpy()
         ch = ch.cpu().numpy()
         ans = np.random.choice(ch, p=prob / prob.sum())
-        return self.int2char[ans], h
+        return '|'.join([self.int2char[x] for x in ch]), h
     
     def new_hidden(self, batch_size):
         h, c = torch.autograd.Variable(torch.randn(self.num_layers, batch_size, self.hidden_dim)),\
@@ -199,7 +198,7 @@ def main():
         # corpus = []
         # for lang in args.corpus:
         #     corpus += load_wikitext(lang=lang, num_samples=args.corpus_length)
-        corpus = load_comments()
+        corpus = load_wiki()
         text = ' '.join(corpus)
 
         char2int, int2char = to_dictionary(text)
@@ -211,7 +210,7 @@ def main():
     else:
         model = torch.load('char_rnn_comments.pth')
         print(len(model.char2int.keys()))
-        print(test(model, '嘉人们', predict_length=args.pred_len))
+        print(test(model, '你', predict_length=args.pred_len))
         # print(text[-2])
         #     model = torch.load('char_rnn.pth')
         #     inputs = '''Happ
