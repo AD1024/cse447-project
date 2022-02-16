@@ -11,6 +11,16 @@ import random
 
 from utils import cached, one_hot_vector, to_dictionary
 
+def load_comments(filename='1.txt'):
+    result = []
+    with open(filename, encoding='UTF-8') as fp:
+        for x in fp.readlines():
+            if x == '\n' or len(x) == 0:
+                continue
+            result.append(x)
+            result.append('。')
+    return result
+
 @cached
 def load_corpus():
     from nltk.corpus import brown
@@ -19,7 +29,7 @@ def load_corpus():
 
 def load_wikitext(lang='zh-cn', num_samples=1024):
     annotations = ['_START_ARTICLE_', '_START_SECTION_', '_START_PARAGRAPH_', '\n', '_NEWLINE_']
-    dataset = load_dataset('wiki40b', 'zh-cn', split='train', beam_runner='DirectRunner')
+    dataset = load_dataset('wiki40b', lang, split='train', beam_runner='DirectRunner')
     result = []
     data = dataset['text']
     for i in range(num_samples):
@@ -151,7 +161,7 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
             optimizer.step()
             if i > 0 and i % 10 == 0:
                 batch_progress.set_description('Batch {} | Loss: {:.4f}'.format(i, loss.item()))
-        torch.save(model, 'char_rnn.pth')
+        torch.save(model, 'char_rnn_comments.pth')
     print('elapsed: {:10.4f} seconds'.format(time.time() - start_time))
 
 def test(model: CharRNN, sentence, predict_length=512):
@@ -163,10 +173,10 @@ def test(model: CharRNN, sentence, predict_length=512):
         h = model.new_hidden(1)
         for ch in sentence:
             c, h = model.predict(ch, h)
-        result = []
+        result = list(sentence)
         result.append(c)
         for _ in range(predict_length):
-            c, h = model.predict(result[-1], h, num_choice=3)
+            c, h = model.predict(result[-1], h, num_choice=5)
             result.append(c)
         return ''.join(result)
 
@@ -179,11 +189,17 @@ def main():
     parser.add_argument('--clip', type=int, default=5)
     parser.add_argument('--lr', type=float, default=0.002)
     parser.add_argument('--pred-len', type=int, default=128)
+    parser.add_argument('--corpus-length', type=int, default=256)
+    parser.add_argument('--corpus', type=list,
+                        default=['en', 'fr', 'de', 'ja', 'zh-cn', 'zh-tw', 'it', 'ko', 'ru', 'ar', 'hi'])
     args = parser.parse_args()
     if args.train:
         # corpus = load_corpus()
         # text = ' '.join(corpus)
-        corpus = load_wikitext()
+        # corpus = []
+        # for lang in args.corpus:
+        #     corpus += load_wikitext(lang=lang, num_samples=args.corpus_length)
+        corpus = load_comments()
         text = ' '.join(corpus)
 
         char2int, int2char = to_dictionary(text)
@@ -193,9 +209,9 @@ def main():
         train(model, dataset, args.epoch, args.batch_size,
                 grad_clip=args.clip, lr=args.lr, seq_length=args.seq_len)
     else:
-        model = torch.load('char_rnn.pth')
+        model = torch.load('char_rnn_comments.pth')
         print(len(model.char2int.keys()))
-        print(test(model, '蔡徐坤打篮球', predict_length=args.pred_len))
+        print(test(model, '嘉人们', predict_length=args.pred_len))
         # print(text[-2])
         #     model = torch.load('char_rnn.pth')
         #     inputs = '''Happ
