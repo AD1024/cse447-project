@@ -49,6 +49,8 @@ class MyModel:
             # predict language of the word
             inp = inp.lower()
             sentence = inp
+            if len(sentence) > 32:
+                sentence = sentence[-50:]
             with torch.no_grad():
                 self.model.eval()
                 h = self.model.new_hidden(1)
