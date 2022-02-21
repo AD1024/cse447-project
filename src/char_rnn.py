@@ -27,18 +27,6 @@ def load_corpus():
     vocab = brown.words()
     return list(map(lambda x: x.lower(), vocab[:len(vocab)]))
 
-def load_wikitext(lang='zh-cn', num_samples=1024):
-    annotations = ['_START_ARTICLE_', '_START_SECTION_', '_START_PARAGRAPH_', '\n', '_NEWLINE_']
-    dataset = load_dataset('wiki40b', lang, split='train', beam_runner='DirectRunner')
-    result = []
-    data = dataset['text']
-    for i in range(num_samples):
-        text = data[i]
-        for x in annotations:
-            text = text.replace(x, '')
-        result.append(text)
-    return result
-
 @cached
 def load_wiki():
     res = []
@@ -51,7 +39,7 @@ def load_wiki():
     return res
 
 class CharRNN(nn.Module):
-    def __init__(self, vocab, char2int, int2char, n_ts=128, hidden_dim=512, num_layers=2, dropout=0.5) -> None:
+    def __init__(self, vocab, char2int, int2char, n_ts=128, embedding_dim=128, hidden_dim=512, num_layers=2, dropout=0.5) -> None:
         super(CharRNN, self).__init__()
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
@@ -62,7 +50,8 @@ class CharRNN(nn.Module):
         self.int2char = int2char
 
         self.drop_out = nn.Dropout(self.dropout)
-        self.lstm = nn.LSTM(len(self.vocab)+1,
+        self.embedding = nn.Embedding(len(self.vocab) + 1, embedding_dim)
+        self.lstm = nn.LSTM(embedding_dim,
                             self.hidden_dim,
                             self.num_layers,
                             batch_first=True,
@@ -70,7 +59,8 @@ class CharRNN(nn.Module):
         self.act = nn.Linear(hidden_dim, len(self.vocab)+1)
 
     def forward(self, x, h):
-        out, (h, c)  = self.lstm(x, h)
+        out = self.drop_out(self.embedding(x))
+        out, (h, c)  = self.lstm(out, h)
         out = self.drop_out(out)
         out = out.contiguous().view(out.size(0) * out.size(1), self.hidden_dim)
         act = self.act(out)
@@ -79,8 +69,8 @@ class CharRNN(nn.Module):
     def predict(self, characters, h=None, num_choice=3):
         if h is None:
             h = self.new_hidden(1)
-        inp = np.array([[self.char2int[x] if x in self.char2int else 0 for x in characters]])
-        inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(self.vocab)+1)))
+        inp = np.array([[self.char2int[x] if x in self.char2int else 0 for x in characters]], dtype=np.longlong)
+        # inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(self.vocab)+1)))
         if torch.cuda.is_available():
             inp = inp.cuda()
         out, h = self.forward(inp, h)
@@ -118,13 +108,15 @@ def to_batches(data, num_seq, seq_length, volcab_len):
             target[:, -1] = data[:, 0]
         else:
             target[:, -1] = data[:, i + seq_length]
-        inputs.append(one_hot_vector(inp, volcab_len))
+        # inputs.append(one_hot_vector(inp, volcab_len))
+        inputs.append(inp.astype(np.longlong))
         targets.append(target)
+    print(np.concatenate(inputs).shape)
     return size, \
-        torch.autograd.Variable(torch.from_numpy(np.concatenate(inputs).reshape(batch_size, -1, seq_length, volcab_len))), \
+        torch.autograd.Variable(torch.from_numpy(np.concatenate(inputs).reshape(batch_size, -1, seq_length))), \
         torch.autograd.Variable(torch.from_numpy(np.array(targets).reshape(batch_size, -1, seq_length)))
 
-def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip=1, lr=0.001):
+def train(model: CharRNN, data, num_epoch, batch_size, checkpoint_filename, seq_length=128, grad_clip=1, lr=0.001):
     start_time = time.time()
     if torch.cuda.is_available():
         model = model.cuda()
@@ -152,7 +144,7 @@ def train(model: CharRNN, data, num_epoch, batch_size, seq_length=128, grad_clip
             optimizer.step()
             if i > 0 and i % 10 == 0:
                 batch_progress.set_description('Batch {} | Loss: {:.4f}'.format(i, loss.item()))
-        torch.save(model, 'char_rnn_comments.pth')
+        torch.save(model, checkpoint_filename)
     print('elapsed: {:10.4f} seconds'.format(time.time() - start_time))
 
 def test(model: CharRNN, sentence, predict_length=512):
@@ -181,6 +173,7 @@ def main():
     parser.add_argument('--lr', type=float, default=0.002)
     parser.add_argument('--pred-len', type=int, default=128)
     parser.add_argument('--corpus-length', type=int, default=256)
+    parser.add_argument('--save-checkpoint', type=str, default='char_rnn_checkpoint.pth')
     parser.add_argument('--corpus', type=list,
                         default=['en', 'fr', 'de', 'ja', 'zh-cn', 'zh-tw', 'it', 'ko', 'ru', 'ar', 'hi'])
     args = parser.parse_args()
@@ -196,8 +189,8 @@ def main():
         char2int, int2char = to_dictionary(text)
         vocab = list(char2int.keys())
         model = CharRNN(vocab, char2int, int2char)
-        dataset = np.array([char2int[x] for x in text])
-        train(model, dataset, args.epoch, args.batch_size,
+        dataset = np.array([char2int[x] for x in text], dtype=np.longlong)
+        train(model, dataset, args.epoch, args.batch_size, args.save_checkpoint,
                 grad_clip=args.clip, lr=args.lr, seq_length=args.seq_len)
     else:
         model = torch.load('char_rnn_comments.pth')
