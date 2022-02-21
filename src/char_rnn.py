@@ -167,7 +167,13 @@ def detach_hidden(h):
         return tuple(detach_hidden(v) for v in h)
 
 def train_quotes(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_filename, seq_length=128, grad_clip=1, lr=0.001):
-    train_iter = torchtext.legacy.data.BPTTIterator(dataset, batch_size, seq_length, repeat=False)
+    if torch.cuda.is_available():
+        model = model.cuda()
+    train_iter = torchtext.legacy.data.BPTTIterator(dataset,
+        batch_size,
+        seq_length,
+        repeat=False,
+        device=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
     vocab_size = len(dataset.fields['text'].vocab)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = torch.nn.CrossEntropyLoss()
