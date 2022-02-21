@@ -46,15 +46,15 @@ def process_quotes(filename):
     return text_config, dataset
 
 class CharRNN(nn.Module):
-    def __init__(self, vocab, char2int, int2char, n_ts=128, embedding_dim=300, hidden_dim=512, num_layers=2, dropout=0.3) -> None:
+    def __init__(self, vocab, text_config, dataset, n_ts=128, embedding_dim=300, hidden_dim=512, num_layers=2, dropout=0.3) -> None:
         super(CharRNN, self).__init__()
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
         self.dropout = dropout
         self.n_ts = n_ts
         self.vocab = vocab
-        self.char2int = char2int
-        self.int2char = int2char
+        self.text_config = text_config
+        self.dataset = dataset
 
         self.embedding = nn.Embedding(len(self.vocab), embedding_dim)
         self.lstm = nn.LSTM(embedding_dim,
@@ -63,6 +63,7 @@ class CharRNN(nn.Module):
                             dropout=self.dropout)
         self.act = nn.Linear(hidden_dim, len(self.vocab))
         self.drop_out = nn.Dropout(self.dropout)
+        self.init_weights()
 
     def init_weights(self):
         rng = 0.1
@@ -166,6 +167,27 @@ def detach_hidden(h):
     else:
         return tuple(detach_hidden(v) for v in h)
 
+def generate_quote(model: CharRNN, text_config, sample_size=3):
+    model.eval()
+    idx = text_config.vocab.stoi["“"]
+    x = torch.Tensor([idx]).view(1, 1).long().to(torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
+    poem = []
+    hidden = model.init_hidden(1)
+    with torch.no_grad():
+        for _ in range(128):
+            output, hidden = model(x, hidden)
+            output = output.view(model.vocab_size)
+            if sample_size > 1:
+                probs = F.softmax(output, dim=0).cpu().numpy()
+                probs /= probs.sum()
+                idx = np.random.choice(range(model.vocab_size), p=probs)
+            else:
+                idx = torch.argmax(output)
+            if idx == text_config.vocab.stoi["”"]: break
+            poem.append(text_config.vocab.itos[idx])
+            x = torch.Tensor([idx]).view(1, 1).long().to(torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
+    return ''.join(poem)
+
 def train_quotes(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_filename, seq_length=128, grad_clip=1, lr=0.001):
     if torch.cuda.is_available():
         model = model.cuda()
@@ -202,8 +224,7 @@ def train_quotes(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_file
                 epoch_loss.append(loss.item())
 
             epoch_loss = np.mean(epoch_loss)
-            if epoch % 10 == 0:
-                print(f'Epoch {epoch}: loss = {epoch_loss}')
+            print(f'Epoch {epoch}: loss = {epoch_loss}')
         except KeyboardInterrupt:
             torch.save(model.state_dict(), "{}_{0:d}.pth".format(checkpoint_filename, epoch))
             return total_loss
@@ -255,13 +276,14 @@ def main():
         # model = CharRNN(vocab, char2int, int2char)
         # dataset = np.array([char2int[x] for x in text], dtype=np.longlong)
         text_config, dataset = process_quotes('data/quotes.txt')
-        model = CharRNN(dataset.fields['text'].vocab, {}, {})
+        model = CharRNN(dataset.fields['text'].vocab, text_config, dataset)
         train_quotes(model, dataset, args.epoch, args.batch_size, args.save_checkpoint,
                 grad_clip=args.clip, lr=args.lr, seq_length=args.seq_len)
     else:
-        model = torch.load('char_rnn_comments.pth')
-        print(len(model.char2int.keys()))
-        print(test(model, '中国邮', predict_length=args.pred_len))
+        model: CharRNN = torch.load(args.save_checkpoint)
+        print(generate_quote(model, model.text_config))
+        # print(len(model.char2int.keys()))
+        # print(test(model, '中国邮', predict_length=args.pred_len))
         # print(text[-2])
         #     model = torch.load('char_rnn.pth')
         #     inputs = '''Happ
