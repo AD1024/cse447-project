@@ -1,4 +1,5 @@
 import torch
+import torchtext
 import torch.nn as nn
 import tqdm
 import argparse
@@ -38,8 +39,14 @@ def load_wiki():
             res.append(s[:120000])
     return res
 
+def process_quotes(filename):
+    text_config = torchtext.legacy.data.Field(init_token='“', eos_token='”')
+    dataset = torchtext.legacy.datasets.LanguageModelingDataset(filename, text_config, newline_eos=False)
+    text_config.build_vocab(dataset)
+    return text_config, dataset
+
 class CharRNN(nn.Module):
-    def __init__(self, vocab, char2int, int2char, n_ts=128, embedding_dim=128, hidden_dim=512, num_layers=2, dropout=0.5) -> None:
+    def __init__(self, vocab, char2int, int2char, n_ts=128, embedding_dim=300, hidden_dim=512, num_layers=2, dropout=0.3) -> None:
         super(CharRNN, self).__init__()
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
@@ -49,14 +56,19 @@ class CharRNN(nn.Module):
         self.char2int = char2int
         self.int2char = int2char
 
-        self.drop_out = nn.Dropout(self.dropout)
-        self.embedding = nn.Embedding(len(self.vocab) + 1, embedding_dim)
+        self.embedding = nn.Embedding(len(self.vocab), embedding_dim)
         self.lstm = nn.LSTM(embedding_dim,
                             self.hidden_dim,
                             self.num_layers,
-                            batch_first=True,
                             dropout=self.dropout)
-        self.act = nn.Linear(hidden_dim, len(self.vocab)+1)
+        self.act = nn.Linear(hidden_dim, len(self.vocab))
+        self.drop_out = nn.Dropout(self.dropout)
+
+    def init_weights(self):
+        rng = 0.1
+        self.embedding.weight.data.uniform_(-rng, rng)
+        self.act.bias.data.zero_()
+        self.act.weight.data.uniform_(-rng, rng)
 
     def forward(self, x, h):
         out = self.drop_out(self.embedding(x))
@@ -81,8 +93,9 @@ class CharRNN(nn.Module):
         return [self.int2char[x] for x in ch], h
     
     def new_hidden(self, batch_size):
-        h, c = torch.autograd.Variable(torch.randn(self.num_layers, batch_size, self.hidden_dim)),\
-               torch.autograd.Variable(torch.randn(self.num_layers, batch_size, self.hidden_dim))
+        weights = next(self.parameters())
+        h, c = weights.new_zeros((self.num_layers, batch_size, self.hidden_dim)),\
+               weights.new_zeros((self.num_layers, batch_size, self.hidden_dim))
         h.zero_()
         c.zero_()
         if torch.cuda.is_available():
@@ -147,6 +160,51 @@ def train(model: CharRNN, data, num_epoch, batch_size, checkpoint_filename, seq_
         torch.save(model, checkpoint_filename)
     print('elapsed: {:10.4f} seconds'.format(time.time() - start_time))
 
+def detach_hidden(h):
+    if isinstance(h, torch.Tensor):
+        return h.detach()
+    else:
+        return tuple(detach_hidden(v) for v in h)
+
+def train_quotes(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_filename, seq_length=128, grad_clip=1, lr=0.001):
+    train_iter = torchtext.legacy.data.BPTTIterator(dataset, batch_size, seq_length, repeat=False)
+    vocab_size = len(dataset.fields['text'].vocab)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    criterion = torch.nn.CrossEntropyLoss()
+    hidden = None
+    total_loss = []
+    for epoch in range(num_epoch):
+        try:
+            model.train()
+            epoch_loss = []
+            train_iter.init_epoch()
+            progress = tqdm.tqdm(train_iter)
+            for i, batch in enumerate(progress):
+                if i % 10 == 0:
+                    progress.set_description(f"Batch #{i}")
+                if hidden is None:
+                    hidden = model.new_hidden(batch.batch_size)
+                else:
+                    hidden = detach_hidden(hidden)
+
+                text, target = batch.text, batch.target
+                output, hidden = model(text, hidden)
+                optimizer.zero_grad()
+                loss = criterion(output.view(-1, vocab_size), target.view(-1))
+                loss.backward()
+                optimizer.step()
+                epoch_loss.append(loss.item())
+
+            epoch_loss = np.mean(epoch_loss)
+            if epoch % 10 == 0:
+                print(f'Epoch {epoch}: loss = {epoch_loss}')
+        except KeyboardInterrupt:
+            torch.save(model.state_dict(), "{}_{0:d}.pth".format(checkpoint_filename, epoch))
+            return total_loss
+    torch.save(model, f'{checkpoint_filename}')
+    return total_loss
+
+
 def test(model: CharRNN, sentence, predict_length=512):
     print("testing")
     with torch.no_grad():
@@ -183,14 +241,16 @@ def main():
         # corpus = []
         # for lang in args.corpus:
         #     corpus += load_wikitext(lang=lang, num_samples=args.corpus_length)
-        corpus = load_wiki()
-        text = ' '.join(corpus)
+        # corpus = load_wiki()
+        # text = ' '.join(corpus)
 
-        char2int, int2char = to_dictionary(text)
-        vocab = list(char2int.keys())
-        model = CharRNN(vocab, char2int, int2char)
-        dataset = np.array([char2int[x] for x in text], dtype=np.longlong)
-        train(model, dataset, args.epoch, args.batch_size, args.save_checkpoint,
+        # char2int, int2char = to_dictionary(text)
+        # vocab = list(char2int.keys())
+        # model = CharRNN(vocab, char2int, int2char)
+        # dataset = np.array([char2int[x] for x in text], dtype=np.longlong)
+        text_config, dataset = process_quotes('data/quotes.txt')
+        model = CharRNN(dataset.fields['text'].vocab, {}, {})
+        train_quotes(model, dataset, args.epoch, args.batch_size, args.save_checkpoint,
                 grad_clip=args.clip, lr=args.lr, seq_length=args.seq_len)
     else:
         model = torch.load('char_rnn_comments.pth')
