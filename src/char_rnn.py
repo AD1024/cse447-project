@@ -39,7 +39,7 @@ def load_wiki():
     return res
 
 class CharRNN(nn.Module):
-    def __init__(self, vocab, char2int, int2char, n_ts=128, embedding_dim=128, hidden_dim=512, num_layers=2, dropout=0.5) -> None:
+    def __init__(self, vocab, char2int, int2char, n_ts=128, embedding_dim=500, hidden_dim=1024, num_layers=3, dropout=0.3) -> None:
         super(CharRNN, self).__init__()
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
@@ -56,7 +56,7 @@ class CharRNN(nn.Module):
                             self.num_layers,
                             batch_first=True,
                             dropout=self.dropout)
-        self.act = nn.Linear(hidden_dim, len(self.vocab)+1)
+        self.act = nn.Linear(hidden_dim, len(self.vocab) + 1)
 
     def forward(self, x, h):
         out = self.drop_out(self.embedding(x))
@@ -64,7 +64,7 @@ class CharRNN(nn.Module):
         out = self.drop_out(out)
         out = out.contiguous().view(out.size(0) * out.size(1), self.hidden_dim)
         act = self.act(out)
-        return act, (h, c)
+        return act, (h.detach(), c.detach())
 
     def predict(self, characters, h=None, num_choice=3):
         if h is None:
@@ -81,10 +81,9 @@ class CharRNN(nn.Module):
         return [self.int2char[x] for x in ch], h
     
     def new_hidden(self, batch_size):
-        h, c = torch.autograd.Variable(torch.randn(self.num_layers, batch_size, self.hidden_dim)),\
-               torch.autograd.Variable(torch.randn(self.num_layers, batch_size, self.hidden_dim))
-        h.zero_()
-        c.zero_()
+        w = next(self.parameters())
+        h, c = w.new_zeros((self.num_layers, batch_size, self.hidden_dim)),\
+               w.new_zeros((self.num_layers, batch_size, self.hidden_dim))
         if torch.cuda.is_available():
             h = h.cuda()
             c = c.cuda()
@@ -178,11 +177,6 @@ def main():
                         default=['en', 'fr', 'de', 'ja', 'zh-cn', 'zh-tw', 'it', 'ko', 'ru', 'ar', 'hi'])
     args = parser.parse_args()
     if args.train:
-        # corpus = load_corpus()
-        # text = ' '.join(corpus)
-        # corpus = []
-        # for lang in args.corpus:
-        #     corpus += load_wikitext(lang=lang, num_samples=args.corpus_length)
         corpus = load_wiki()
         text = ' '.join(corpus)
 
@@ -193,26 +187,8 @@ def main():
         train(model, dataset, args.epoch, args.batch_size, args.save_checkpoint,
                 grad_clip=args.clip, lr=args.lr, seq_length=args.seq_len)
     else:
-        model = torch.load('char_rnn_comments.pth')
+        model = torch.load(args.save_checkpoint)
         print(len(model.char2int.keys()))
         print(test(model, '中国邮', predict_length=args.pred_len))
-        # print(text[-2])
-        #     model = torch.load('char_rnn.pth')
-        #     inputs = '''Happ
-        # Happy Ne
-        # Happy New Yea
-        # That’s one small ste
-        # That’s one sm
-        # That’
-        # Th
-        # one giant leap for mankin
-        # one giant leap fo
-        # one giant lea
-        # one giant l
-        # one gia
-        # on'''.split('\n')
-        #     for input in inputs:
-        #         print(input)
-        #         print(test(model, input, predict_length=1))
 if __name__ == '__main__':  
     main()

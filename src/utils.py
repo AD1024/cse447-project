@@ -11,7 +11,7 @@ def cached(f, cmp=lambda cache, data: cache == data):
 
 def to_dictionary(characters):
     cs = set(characters)
-    i2c = dict(zip(range(1, len(cs)+1), cs))
+    i2c = dict(zip(range(1, len(cs) + 1), cs))
     c2i = {v : k for (k, v) in i2c.items()}
     return c2i, i2c
 
