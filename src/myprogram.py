@@ -73,9 +73,9 @@ class MyModel:
         # with open(os.path.join(work_dir, 'model.checkpoint')) as f:
         #     dummy_save = f.read()
         if torch.cuda.is_available():
-            return torch.load(os.path.join(work_dir, 'char_rnn.pth'))
+            return torch.load(os.path.join(work_dir, '447_char_rnn_checkpoint.pth'))
         else:
-            return torch.load(os.path.join(work_dir, 'char_rnn.pth'), map_location='cpu')
+            return torch.load(os.path.join(work_dir, '447_char_rnn_checkpoint.pth'), map_location='cpu')
 
 
 if __name__ == '__main__':

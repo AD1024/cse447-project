@@ -35,11 +35,11 @@ def load_wiki():
         progress.set_description('loading data/' + fname)
         with open('data/' + fname) as f:
             s = f.read()
-            res.append(s[:120000])
+            res.append(s[:160000])
     return res
 
 class CharRNN(nn.Module):
-    def __init__(self, vocab, char2int, int2char, n_ts=128, embedding_dim=500, hidden_dim=1024, num_layers=3, dropout=0.3) -> None:
+    def __init__(self, vocab, char2int, int2char, n_ts=128, embedding_dim=300, hidden_dim=512, num_layers=3, dropout=0.3) -> None:
         super(CharRNN, self).__init__()
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
@@ -61,7 +61,6 @@ class CharRNN(nn.Module):
     def forward(self, x, h):
         out = self.drop_out(self.embedding(x))
         out, (h, c)  = self.lstm(out, h)
-        out = self.drop_out(out)
         out = out.contiguous().view(out.size(0) * out.size(1), self.hidden_dim)
         act = self.act(out)
         return act, (h.detach(), c.detach())
@@ -69,7 +68,7 @@ class CharRNN(nn.Module):
     def predict(self, characters, h=None, num_choice=3):
         if h is None:
             h = self.new_hidden(1)
-        inp = np.array([[self.char2int[x] if x in self.char2int else 0 for x in characters]], dtype=np.longlong)
+        inp = torch.from_numpy(np.array([[self.char2int[x] if x in self.char2int else 0 for x in characters]], dtype=np.longlong))
         # inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(self.vocab)+1)))
         if torch.cuda.is_available():
             inp = inp.cuda()
@@ -91,9 +90,9 @@ class CharRNN(nn.Module):
 
 def to_batches(data, num_seq, seq_length, volcab_len):
     size_per_batch = num_seq * seq_length
-    batch_size = len(data) // size_per_batch
-    data = data[:batch_size * size_per_batch].reshape((num_seq, -1))
-    size = data.shape[1] // seq_length
+    num_batch = len(data) // size_per_batch
+    data = data[:num_batch * size_per_batch].reshape((num_batch, -1))
+    print(f'Data size: {data.shape}')
     inputs = []
     targets = []
     print(f'Total inputs: {data.shape[1]}')
@@ -106,14 +105,14 @@ def to_batches(data, num_seq, seq_length, volcab_len):
         if i + seq_length >= data.shape[1]:
             target[:, -1] = data[:, 0]
         else:
-            target[:, -1] = data[:, i + seq_length]
+            target[:, -1] = data[:, i + seq_length]  
         # inputs.append(one_hot_vector(inp, volcab_len))
         inputs.append(inp.astype(np.longlong))
         targets.append(target)
-    print(np.concatenate(inputs).shape)
-    return size, \
-        torch.autograd.Variable(torch.from_numpy(np.concatenate(inputs).reshape(batch_size, -1, seq_length))), \
-        torch.autograd.Variable(torch.from_numpy(np.array(targets).reshape(batch_size, -1, seq_length)))
+    # print(np.concatenate(inputs).shape)
+    return num_batch, \
+        torch.autograd.Variable(torch.from_numpy(np.concatenate(inputs).reshape(num_batch, -1, seq_length))), \
+        torch.autograd.Variable(torch.from_numpy(np.array(targets).reshape(num_batch, -1, seq_length)))
 
 def train(model: CharRNN, data, num_epoch, batch_size, checkpoint_filename, seq_length=128, grad_clip=1, lr=0.001):
     start_time = time.time()
@@ -130,6 +129,7 @@ def train(model: CharRNN, data, num_epoch, batch_size, checkpoint_filename, seq_
         epoch_progress.set_description(f'Epoch {epoch}')
         hc = model.new_hidden(batch_size)
         batch_progress = tqdm.tqdm(range(1, batch_seq_size + 1), position=1)
+        running_loss = []
         for (i, inp, target) in zip(batch_progress, inputs, targets):
             if torch.cuda.is_available():
                 inp = inp.cuda()
@@ -137,12 +137,14 @@ def train(model: CharRNN, data, num_epoch, batch_size, checkpoint_filename, seq_
             hc = list(map(lambda x: torch.autograd.Variable(x.data), hc))
             model.zero_grad()
             out, h = model(inp, hc)
-            loss = criterion(out, target.view(batch_size * seq_length))
+            loss = criterion(out, target.view(-1))
             loss.backward()
+            running_loss.append(loss.item())
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
             if i > 0 and i % 10 == 0:
                 batch_progress.set_description('Batch {} | Loss: {:.4f}'.format(i, loss.item()))
+        print(f'Loss Avg: {sum(running_loss) / len(running_loss)}')
         torch.save(model, checkpoint_filename)
     print('elapsed: {:10.4f} seconds'.format(time.time() - start_time))
 
@@ -150,17 +152,15 @@ def test(model: CharRNN, sentence, predict_length=512):
     print("testing")
     with torch.no_grad():
         model.eval()
-        sentence = sentence.lower()
         # print(f'Begin: {sentence}')
         h = model.new_hidden(1)
-        for ch in sentence:
-            c, h = model.predict(ch, h)
-        result = list(sentence)
-        result.append(c)
-        for _ in range(predict_length):
-            c, h = model.predict(result[-1], h, num_choice=5)
-            result.append(c)
-        return ''.join(result)
+        #for ch in sentence:
+        c, h = model.predict(sentence, h)
+        # result = list(sentence)
+        # result.append(c)
+        # for _ in range(predict_length):
+        # c, h = model.predict(result[-1], h, num_choice=5)
+        return c
 
 def main():
     parser = argparse.ArgumentParser()
@@ -182,13 +182,13 @@ def main():
 
         char2int, int2char = to_dictionary(text)
         vocab = list(char2int.keys())
-        model = CharRNN(vocab, char2int, int2char)
+        model = CharRNN(vocab, char2int, int2char, n_ts=args.seq_len)
         dataset = np.array([char2int[x] for x in text], dtype=np.longlong)
         train(model, dataset, args.epoch, args.batch_size, args.save_checkpoint,
                 grad_clip=args.clip, lr=args.lr, seq_length=args.seq_len)
     else:
         model = torch.load(args.save_checkpoint)
         print(len(model.char2int.keys()))
-        print(test(model, '中国邮', predict_length=args.pred_len))
+        print(test(model, 'one giant l', predict_length=args.pred_len))
 if __name__ == '__main__':  
     main()
