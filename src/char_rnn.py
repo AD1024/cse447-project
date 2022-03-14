@@ -1,4 +1,3 @@
-from sklearn.utils import shuffle
 import torch
 import torchtext
 import torch.nn as nn
