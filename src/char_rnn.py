@@ -12,6 +12,8 @@ import random
 
 from utils import cached, one_hot_vector, to_dictionary
 
+DEVICE = torch.device('cuda:1') if torch.cuda.is_available() else torch.device('cpu')
+
 def load_comments(filename='1.txt'):
     result = []
     with open(filename, encoding='UTF-8') as fp:
@@ -30,6 +32,7 @@ def load_corpus():
 
 @cached
 def load_wiki(filename='lang-combined.json'):
+    print('Loading dataset')
     data_config = torchtext.legacy.data.Field(init_token='<bos>', eos_token='<eos>')
     dataset = torchtext.legacy.datasets.LanguageModelingDataset(f'data/{filename}', data_config, newline_eos=False)
     data_config.build_vocab(dataset)
@@ -63,24 +66,25 @@ class CharRNN(nn.Module):
     def predict(self, characters, h=None, num_choice=3):
         if h is None:
             h = self.new_hidden(1)
-        inp = torch.from_numpy(np.array([[self.char2int[x] if x in self.char2int else 0 for x in characters]], dtype=np.longlong))
+        inp = torch.from_numpy(np.array([[self.text_config.vocab[x] for x in characters]], dtype=np.longlong)).transpose(0, 1)
         # inp = torch.autograd.Variable(torch.from_numpy(one_hot_vector(inp, len(self.vocab)+1)))
         if torch.cuda.is_available():
-            inp = inp.cuda()
+            inp = inp.to(DEVICE)
         out, h = self.forward(inp, h)
+        out = out.view(-1, len(self.vocab))
         prob = F.softmax(out[-1], dim=0)
         prob, ch = prob.topk(num_choice)
         prob = prob.cpu().numpy()
         ch = ch.cpu().numpy()
-        return [self.int2char[x] for x in ch], h
+        return [self.text_config.vocab.itos[x] for x in ch], h
     
     def new_hidden(self, batch_size):
         w = next(self.parameters())
         h, c = w.new_zeros((self.num_layers, batch_size, self.hidden_dim)),\
                w.new_zeros((self.num_layers, batch_size, self.hidden_dim))
         if torch.cuda.is_available():
-            h = h.cuda()
-            c = c.cuda()
+            h = h.to(DEVICE)
+            c = c.to(DEVICE)
         return h, c
 
 def detach_hidden(h):
@@ -92,19 +96,20 @@ def detach_hidden(h):
 def train(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_filename, seq_length=128, grad_clip=1, lr=0.001):
     start_time = time.time()
     if torch.cuda.is_available():
-        model = model.cuda()
+        model = model.to(DEVICE)
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = torch.nn.CrossEntropyLoss()
     epoch_progress = tqdm.tqdm(range(num_epoch), position=0)
     total_loss = []
     hidden = None
+    print(f'Train with batch size = {batch_size}')
     train_iter = torchtext.legacy.data.BPTTIterator(dataset,
         batch_size,
         seq_length,
         shuffle=True,
         repeat=False,
-        device=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
+        device=DEVICE)
     vocab_size = len(dataset.fields['text'].vocab)
     for epoch in range(num_epoch):
         try:
@@ -114,24 +119,26 @@ def train(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_filename, s
             progress = tqdm.tqdm(train_iter)
             for i, batch in enumerate(progress):
                 if i % 10 == 0:
-                    progress.set_description(f"Batch #{i}")
-                if hidden is None:
-                    hidden = model.new_hidden(batch.batch_size)
-                else:
-                    hidden = detach_hidden(hidden)
-
+                    progress.set_description(f"Batch #{i} | RL = {np.mean(epoch_loss)}")
+                # if hidden is None:
+                hidden = model.new_hidden(batch.batch_size)
+                model.zero_grad()
+                loss = 0
+                # else:
+                #     hidden = detach_hidden(hidden)
                 text, target = batch.text, batch.target
-                output, hidden = model(text, hidden)
-                optimizer.zero_grad()
-                loss = criterion(output.view(-1, vocab_size), target.view(-1))
+                for i in range(text.size(0)):
+                    output, hidden = model(text[i, :].unsqueeze(0), hidden)
+                    loss += criterion(output.view(-1, vocab_size), target[i, :].view(-1))
                 loss.backward()
+                torch.nn.utils.clip_grad.clip_grad_norm_(model.parameters(), 5.0)
                 optimizer.step()
-                epoch_loss.append(loss.item())
+                epoch_loss.append(loss.item() / text.size(0))
 
             epoch_loss = np.mean(epoch_loss)
             print(f'Epoch {epoch}: loss = {epoch_loss}')
         except KeyboardInterrupt:
-            torch.save(model.state_dict(), "{}_{0:d}.pth".format(checkpoint_filename, epoch))
+            torch.save(model.state_dict(), "{}.pth".format(checkpoint_filename))
             return total_loss
     torch.save(model.state_dict(), f'{checkpoint_filename}')
     print('elapsed: {:10.4f} seconds'.format(time.time() - start_time))
@@ -139,6 +146,10 @@ def train(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_filename, s
 
 def test(model: CharRNN, sentence, predict_length=512):
     print("testing")
+    sentence = list(map(lambda x: '<s>' if x == ' ' else x, sentence))
+    sentence = ['<bos>'] + sentence
+    model.to(DEVICE)
+    print(sentence)
     with torch.no_grad():
         model.eval()
         # print(f'Begin: {sentence}')
@@ -171,8 +182,9 @@ def main():
         train(model, dataset, args.epoch, args.batch_size, args.save_checkpoint,
                 grad_clip=args.clip, lr=args.lr, seq_length=args.seq_len)
     else:
-        model = torch.load(args.save_checkpoint)
-        print(len(model.char2int.keys()))
-        print(test(model, 'one giant l', predict_length=args.pred_len))
+        text_config, dataset = load_wiki()
+        model = CharRNN(dataset.fields['text'].vocab, text_config, n_ts=args.seq_len)
+        model.load_state_dict(torch.load(args.save_checkpoint))
+        print(test(model, '菲尔兹数学', predict_length=args.pred_len))
 if __name__ == '__main__':  
     main()
