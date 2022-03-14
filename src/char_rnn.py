@@ -140,6 +140,7 @@ def train(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_filename, s
         except KeyboardInterrupt:
             torch.save(model.state_dict(), "{}.pth".format(checkpoint_filename))
             return total_loss
+        torch.save(model.state_dict(), checkpoint_filename)
     torch.save(model.state_dict(), f'{checkpoint_filename}')
     print('elapsed: {:10.4f} seconds'.format(time.time() - start_time))
     return total_loss
