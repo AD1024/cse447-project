@@ -1,4 +1,6 @@
+from sklearn.utils import shuffle
 import torch
+import torchtext
 import torch.nn as nn
 import tqdm
 import argparse
@@ -28,35 +30,29 @@ def load_corpus():
     return list(map(lambda x: x.lower(), vocab[:len(vocab)]))
 
 @cached
-def load_wiki():
-    res = []
-    progress = tqdm.tqdm(list(os.listdir('data')))
-    for fname in progress:
-        progress.set_description('loading data/' + fname)
-        with open('data/' + fname) as f:
-            s = f.read()
-            res.append(s[:160000])
-    return res
+def load_wiki(filename='lang-combined.json'):
+    data_config = torchtext.legacy.data.Field(init_token='<bos>', eos_token='<eos>')
+    dataset = torchtext.legacy.datasets.LanguageModelingDataset(f'data/{filename}', data_config, newline_eos=False)
+    data_config.build_vocab(dataset)
+    return data_config, dataset
 
 class CharRNN(nn.Module):
-    def __init__(self, vocab, char2int, int2char, n_ts=128, embedding_dim=300, hidden_dim=512, num_layers=3, dropout=0.3) -> None:
+    def __init__(self, vocab, text_config, n_ts=128, embedding_dim=300, hidden_dim=512, num_layers=3, dropout=0.3) -> None:
         super(CharRNN, self).__init__()
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
         self.dropout = dropout
         self.n_ts = n_ts
         self.vocab = vocab
-        self.char2int = char2int
-        self.int2char = int2char
+        self.text_config = text_config
 
         self.drop_out = nn.Dropout(self.dropout)
-        self.embedding = nn.Embedding(len(self.vocab) + 1, embedding_dim)
+        self.embedding = nn.Embedding(len(self.vocab), embedding_dim)
         self.lstm = nn.LSTM(embedding_dim,
                             self.hidden_dim,
                             self.num_layers,
-                            batch_first=True,
                             dropout=self.dropout)
-        self.act = nn.Linear(hidden_dim, len(self.vocab) + 1)
+        self.act = nn.Linear(hidden_dim, len(self.vocab))
 
     def forward(self, x, h):
         out = self.drop_out(self.embedding(x))
@@ -88,65 +84,59 @@ class CharRNN(nn.Module):
             c = c.cuda()
         return h, c
 
-def to_batches(data, num_seq, seq_length, volcab_len):
-    size_per_batch = num_seq * seq_length
-    num_batch = len(data) // size_per_batch
-    data = data[:num_batch * size_per_batch].reshape((num_batch, -1))
-    print(f'Data size: {data.shape}')
-    inputs = []
-    targets = []
-    print(f'Total inputs: {data.shape[1]}')
-    for i in range(0, data.shape[1], seq_length):
-        if i % 1000 == 0:
-            print(f'Processing Inputs: {i}')
-        inp = data[:, i : i + seq_length]
-        target = np.zeros_like(inp)
-        target[:, :-1] = inp[:, 1:]
-        if i + seq_length >= data.shape[1]:
-            target[:, -1] = data[:, 0]
-        else:
-            target[:, -1] = data[:, i + seq_length]  
-        # inputs.append(one_hot_vector(inp, volcab_len))
-        inputs.append(inp.astype(np.longlong))
-        targets.append(target)
-    # print(np.concatenate(inputs).shape)
-    return num_batch, \
-        torch.autograd.Variable(torch.from_numpy(np.concatenate(inputs).reshape(num_batch, -1, seq_length))), \
-        torch.autograd.Variable(torch.from_numpy(np.array(targets).reshape(num_batch, -1, seq_length)))
+def detach_hidden(h):
+    if isinstance(h, torch.Tensor):
+        return h.detach()
+    else:
+        return tuple(detach_hidden(v) for v in h)
 
-def train(model: CharRNN, data, num_epoch, batch_size, checkpoint_filename, seq_length=128, grad_clip=1, lr=0.001):
+def train(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_filename, seq_length=128, grad_clip=1, lr=0.001):
     start_time = time.time()
     if torch.cuda.is_available():
         model = model.cuda()
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = torch.nn.CrossEntropyLoss()
-    train_set = data[:int(0.9 * len(data))]
     epoch_progress = tqdm.tqdm(range(num_epoch), position=0)
+    total_loss = []
+    hidden = None
+    train_iter = torchtext.legacy.data.BPTTIterator(dataset,
+        batch_size,
+        seq_length,
+        shuffle=True,
+        repeat=False,
+        device=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
+    vocab_size = len(dataset.fields['text'].vocab)
+    for epoch in range(num_epoch):
+        try:
+            model.train()
+            epoch_loss = []
+            train_iter.init_epoch()
+            progress = tqdm.tqdm(train_iter)
+            for i, batch in enumerate(progress):
+                if i % 10 == 0:
+                    progress.set_description(f"Batch #{i}")
+                if hidden is None:
+                    hidden = model.new_hidden(batch.batch_size)
+                else:
+                    hidden = detach_hidden(hidden)
 
-    batch_seq_size, inputs, targets = to_batches(train_set, batch_size, seq_length, len(model.vocab)+1)
-    for epoch in epoch_progress:
-        epoch_progress.set_description(f'Epoch {epoch}')
-        hc = model.new_hidden(batch_size)
-        batch_progress = tqdm.tqdm(range(1, batch_seq_size + 1), position=1)
-        running_loss = []
-        for (i, inp, target) in zip(batch_progress, inputs, targets):
-            if torch.cuda.is_available():
-                inp = inp.cuda()
-                target = target.cuda()
-            hc = list(map(lambda x: torch.autograd.Variable(x.data), hc))
-            model.zero_grad()
-            out, h = model(inp, hc)
-            loss = criterion(out, target.view(-1))
-            loss.backward()
-            running_loss.append(loss.item())
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
-            if i > 0 and i % 10 == 0:
-                batch_progress.set_description('Batch {} | Loss: {:.4f}'.format(i, loss.item()))
-        print(f'Loss Avg: {sum(running_loss) / len(running_loss)}')
-        torch.save(model, checkpoint_filename)
+                text, target = batch.text, batch.target
+                output, hidden = model(text, hidden)
+                optimizer.zero_grad()
+                loss = criterion(output.view(-1, vocab_size), target.view(-1))
+                loss.backward()
+                optimizer.step()
+                epoch_loss.append(loss.item())
+
+            epoch_loss = np.mean(epoch_loss)
+            print(f'Epoch {epoch}: loss = {epoch_loss}')
+        except KeyboardInterrupt:
+            torch.save(model.state_dict(), "{}_{0:d}.pth".format(checkpoint_filename, epoch))
+            return total_loss
+    torch.save(model.state_dict(), f'{checkpoint_filename}')
     print('elapsed: {:10.4f} seconds'.format(time.time() - start_time))
+    return total_loss
 
 def test(model: CharRNN, sentence, predict_length=512):
     print("testing")
@@ -177,13 +167,8 @@ def main():
                         default=['en', 'fr', 'de', 'ja', 'zh-cn', 'zh-tw', 'it', 'ko', 'ru', 'ar', 'hi'])
     args = parser.parse_args()
     if args.train:
-        corpus = load_wiki()
-        text = ' '.join(corpus)
-
-        char2int, int2char = to_dictionary(text)
-        vocab = list(char2int.keys())
-        model = CharRNN(vocab, char2int, int2char, n_ts=args.seq_len)
-        dataset = np.array([char2int[x] for x in text], dtype=np.longlong)
+        text_config, dataset = load_wiki()
+        model = CharRNN(dataset.fields['text'].vocab, text_config, n_ts=args.seq_len)
         train(model, dataset, args.epoch, args.batch_size, args.save_checkpoint,
                 grad_clip=args.clip, lr=args.lr, seq_length=args.seq_len)
     else:
