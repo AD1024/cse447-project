@@ -4,6 +4,7 @@ import string
 import random
 import torch
 from char_rnn import CharRNN
+from char_rnn import test as predict
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 class MyModel:

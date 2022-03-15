@@ -12,29 +12,13 @@ import random
 
 from utils import cached, one_hot_vector, to_dictionary
 
-DEVICE = torch.device('cuda:1') if torch.cuda.is_available() else torch.device('cpu')
-
-def load_comments(filename='1.txt'):
-    result = []
-    with open(filename, encoding='UTF-8') as fp:
-        for x in fp.readlines():
-            if x == '\n' or len(x) == 0:
-                continue
-            result.append(x)
-            result.append('。')
-    return result
-
-@cached
-def load_corpus():
-    from nltk.corpus import brown
-    vocab = brown.words()
-    return list(map(lambda x: x.lower(), vocab[:len(vocab)]))
+DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 @cached
 def load_wiki(filename='lang-combined.json'):
     print('Loading dataset')
-    data_config = torchtext.legacy.data.Field(init_token='<bos>', eos_token='<eos>')
-    dataset = torchtext.legacy.datasets.LanguageModelingDataset(f'data/{filename}', data_config, newline_eos=False)
+    data_config = torchtext.data.Field(init_token='<bos>', eos_token='<eos>')
+    dataset = torchtext.datasets.LanguageModelingDataset(f'data/{filename}', data_config, newline_eos=False)
     data_config.build_vocab(dataset)
     return data_config, dataset
 
@@ -104,7 +88,7 @@ def train(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_filename, s
     total_loss = []
     hidden = None
     print(f'Train with batch size = {batch_size}')
-    train_iter = torchtext.legacy.data.BPTTIterator(dataset,
+    train_iter = torchtext.data.BPTTIterator(dataset,
         batch_size,
         seq_length,
         shuffle=True,
@@ -146,22 +130,22 @@ def train(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_filename, s
     return total_loss
 
 def test(model: CharRNN, sentence, predict_length=512):
-    print("testing")
     sentence = list(map(lambda x: '<s>' if x == ' ' else x, sentence))
     sentence = ['<bos>'] + sentence
     model.to(DEVICE)
-    print(sentence)
     with torch.no_grad():
         model.eval()
         # print(f'Begin: {sentence}')
         h = model.new_hidden(1)
-        #for ch in sentence:
-        c, h = model.predict(sentence, h)
+        result = []
+        for ch in sentence:
+            c, h = model.predict(ch, h)
+            result.append(c)
         # result = list(sentence)
         # result.append(c)
         # for _ in range(predict_length):
         # c, h = model.predict(result[-1], h, num_choice=5)
-        return c
+        return result[-1]
 
 def main():
     parser = argparse.ArgumentParser()
@@ -186,6 +170,20 @@ def main():
         text_config, dataset = load_wiki()
         model = CharRNN(dataset.fields['text'].vocab, text_config, n_ts=args.seq_len)
         model.load_state_dict(torch.load(args.save_checkpoint))
-        print(test(model, '菲尔兹数学', predict_length=args.pred_len))
+        # print(test(model, 'さような', predict_length=args.pred_len))
+        with open('data/combined-test.txt') as fp:
+            lines = fp.readlines()
+            lines = [x.replace('\n', '') for x in lines]
+            correct = 0
+            with open('data/combined-answer.txt') as ans:
+                ans = ans.readlines()
+                ans = [x.replace('\n', '') for x in ans]
+                for inp, target in zip(lines, ans):
+                    answer = test(model, inp)
+                    print(answer, target, target in answer)
+                    if target in answer:
+                        correct += 1
+                print(f'Accuracy: {correct / len(lines)}')
+
 if __name__ == '__main__':  
     main()
