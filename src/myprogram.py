@@ -63,14 +63,12 @@ class MyModel:
     @classmethod
     def load(cls, work_dir):
         # your code here
-        # this particular model has nothing to load, but for demonstra  tion purposes we will load a blank file
-        # with open(os.path.join(work_dir, 'model.checkpoint')) as f:
-        #     dummy_save = f.read()
         text_config, dataset = load_wiki(os.path.join(work_dir, 'lang-combined.json'))
         model = CharRNN(dataset.fields['text'].vocab, text_config, n_ts=64)
-        model.load_state_dict(torch.load(os.path.join(work_dir, '447_char_rnn_checkpoint_4.pth')))
+        model.load_state_dict(torch.load(os.path.join(work_dir, '447_char_rnn_checkpoint_4.pth'), map_location='cpu'))
         if torch.cuda.is_available():
-            return model.to(torch.device('cuda'))
+            model.to(torch.device('cuda'))
+        return model
 
 
 if __name__ == '__main__':
