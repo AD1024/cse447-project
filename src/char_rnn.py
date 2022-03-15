@@ -15,10 +15,10 @@ from utils import cached, one_hot_vector, to_dictionary
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 @cached
-def load_wiki(filename='lang-combined.json'):
+def load_wiki(filename='data/lang-combined.json'):
     print('Loading dataset')
     data_config = torchtext.data.Field(init_token='<bos>', eos_token='<eos>')
-    dataset = torchtext.datasets.LanguageModelingDataset(f'data/{filename}', data_config, newline_eos=False)
+    dataset = torchtext.datasets.LanguageModelingDataset(f'{filename}', data_config, newline_eos=False)
     data_config.build_vocab(dataset)
     return data_config, dataset
 

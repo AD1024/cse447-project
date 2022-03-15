@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 import os
+from statistics import mode
 import string
 import random
 import torch
-from char_rnn import CharRNN
-from char_rnn import test as predict
+from char_rnn import CharRNN, load_wiki, test as predict
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 class MyModel:
@@ -50,14 +50,7 @@ class MyModel:
             # predict language of the word
             inp = inp.lower()
             sentence = inp
-            if len(sentence) > 32:
-                sentence = sentence[-50:]
-            with torch.no_grad():
-                self.model.eval()
-                h = self.model.new_hidden(1)
-                c, h = self.model.predict(str(sentence), h, num_choice=3)
-                preds.append(''.join(c))
-                print(sentence, " + ", preds[-1])
+            preds.append(''.join(map(lambda x: ' ' if x == '<s>' else '' if x == '<eos>' else x, predict(self.model, sentence))))
         return preds
 
     def save(self, work_dir):
@@ -73,10 +66,11 @@ class MyModel:
         # this particular model has nothing to load, but for demonstra  tion purposes we will load a blank file
         # with open(os.path.join(work_dir, 'model.checkpoint')) as f:
         #     dummy_save = f.read()
+        text_config, dataset = load_wiki(os.path.join(work_dir, 'lang-combined.json'))
+        model = CharRNN(dataset.fields['text'].vocab, text_config, n_ts=64)
+        model.load_state_dict(torch.load(os.path.join(work_dir, '447_char_rnn_checkpoint_4.pth')))
         if torch.cuda.is_available():
-            return torch.load(os.path.join(work_dir, '447_char_rnn_checkpoint2.pth'))
-        else:
-            return torch.load(os.path.join(work_dir, '447_char_rnn_checkpoint2.pth'), map_location='cpu')
+            return model.to(torch.device('cuda'))
 
 
 if __name__ == '__main__':
