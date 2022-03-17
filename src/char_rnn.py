@@ -104,63 +104,6 @@ class CharRNN(nn.Module):
             c = c.cuda()
         return h, c
 
-def to_batches(data, num_seq, seq_length, volcab_len):
-    size_per_batch = num_seq * seq_length
-    batch_size = len(data) // size_per_batch
-    data = data[:batch_size * size_per_batch].reshape((num_seq, -1))
-    size = data.shape[1] // seq_length
-    inputs = []
-    targets = []
-    print(f'Total inputs: {data.shape[1]}')
-    for i in range(0, data.shape[1], seq_length):
-        if i % 1000 == 0:
-            print(f'Processing Inputs: {i}')
-        inp = data[:, i : i + seq_length]
-        target = np.zeros_like(inp)
-        target[:, :-1] = inp[:, 1:]
-        if i + seq_length >= data.shape[1]:
-            target[:, -1] = data[:, 0]
-        else:
-            target[:, -1] = data[:, i + seq_length]
-        # inputs.append(one_hot_vector(inp, volcab_len))
-        inputs.append(inp.astype(np.longlong))
-        targets.append(target)
-    print(np.concatenate(inputs).shape)
-    return size, \
-        torch.autograd.Variable(torch.from_numpy(np.concatenate(inputs).reshape(batch_size, -1, seq_length))), \
-        torch.autograd.Variable(torch.from_numpy(np.array(targets).reshape(batch_size, -1, seq_length)))
-
-def train(model: CharRNN, data, num_epoch, batch_size, checkpoint_filename, seq_length=128, grad_clip=1, lr=0.001):
-    start_time = time.time()
-    if torch.cuda.is_available():
-        model = model.cuda()
-    model.train()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = torch.nn.CrossEntropyLoss()
-    train_set = data[:int(0.9 * len(data))]
-    epoch_progress = tqdm.tqdm(range(num_epoch), position=0)
-
-    batch_seq_size, inputs, targets = to_batches(train_set, batch_size, seq_length, len(model.vocab)+1)
-    for epoch in epoch_progress:
-        epoch_progress.set_description(f'Epoch {epoch}')
-        hc = model.new_hidden(batch_size)
-        batch_progress = tqdm.tqdm(range(1, batch_seq_size + 1), position=1)
-        for (i, inp, target) in zip(batch_progress, inputs, targets):
-            if torch.cuda.is_available():
-                inp = inp.cuda()
-                target = target.cuda()
-            hc = list(map(lambda x: torch.autograd.Variable(x.data), hc))
-            model.zero_grad()
-            out, h = model(inp, hc)
-            loss = criterion(out, target.view(batch_size * seq_length))
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
-            if i > 0 and i % 10 == 0:
-                batch_progress.set_description('Batch {} | Loss: {:.4f}'.format(i, loss.item()))
-        torch.save(model, checkpoint_filename)
-    print('elapsed: {:10.4f} seconds'.format(time.time() - start_time))
-
 def detach_hidden(h):
     if isinstance(h, torch.Tensor):
         return h.detach()
@@ -199,7 +142,6 @@ def train_quotes(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_file
     vocab_size = len(dataset.fields['text'].vocab)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = torch.nn.CrossEntropyLoss()
-    hidden = None
     total_loss = []
     for epoch in range(num_epoch):
         try:
@@ -210,13 +152,13 @@ def train_quotes(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_file
             for i, batch in enumerate(progress):
                 if i % 10 == 0:
                     progress.set_description(f"Batch #{i}")
-                if hidden is None:
-                    hidden = model.new_hidden(batch.batch_size)
-                else:
-                    hidden = detach_hidden(hidden)
+                # if hidden is None:
+                hidden = model.new_hidden(batch.batch_size)
+                # else:
+                #     hidden = detach_hidden(hidden)
 
                 text, target = batch.text, batch.target
-                output, hidden = model(text, hidden)
+                output, _ = model(text, hidden)
                 optimizer.zero_grad()
                 loss = criterion(output.view(-1, vocab_size), target.view(-1))
                 loss.backward()
@@ -230,23 +172,6 @@ def train_quotes(model: CharRNN, dataset, num_epoch, batch_size, checkpoint_file
             return total_loss
     torch.save(model, f'{checkpoint_filename}')
     return total_loss
-
-
-def test(model: CharRNN, sentence, predict_length=512):
-    print("testing")
-    with torch.no_grad():
-        model.eval()
-        sentence = sentence.lower()
-        # print(f'Begin: {sentence}')
-        h = model.new_hidden(1)
-        for ch in sentence:
-            c, h = model.predict(ch, h)
-        result = list(sentence)
-        result.append(c)
-        for _ in range(predict_length):
-            c, h = model.predict(result[-1], h, num_choice=5)
-            result.append(c)
-        return ''.join(result)
 
 def main():
     parser = argparse.ArgumentParser()
